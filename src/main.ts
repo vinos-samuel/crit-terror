@@ -160,7 +160,8 @@ function handleEvents(events: GameEvent[]) {
         break;
       case 'merge': {
         const mx = L.lawn.x + (e.col + 0.5) * L.cellW;
-        const my = L.lawn.y + (e.row + 0.02) * L.cellH;
+        const my = L.lawn.y + (e.row + 0.38) * L.cellH;
+        const gap = Math.max(124, size * 1.5);
         addEffect({
           kind: 'puff',
           x: mx,
@@ -170,23 +171,23 @@ function handleEvents(events: GameEvent[]) {
         });
         addEffect({
           kind: 'word',
-          text: 'BASTION!',
+          text: 'MERGE!',
           x: mx,
-          y: my - size * 0.42,
-          dur: 1.45,
-          size: size * 0.34,
-          rot: -0.08,
-          color: '#ffd7a8',
+          y: my,
+          dur: 1.7,
+          size: size * 0.42,
+          rot: 0.05,
+          color: '#fff3a6',
         });
         addEffect({
           kind: 'word',
-          text: 'MERGE!',
+          text: 'BASTION!',
           x: mx,
-          y: my + size * 0.08,
-          dur: 1.35,
-          size: size * 0.48,
-          rot: 0.06,
-          color: '#fff3a6',
+          y: my - gap,
+          dur: 1.85,
+          size: size * 0.32,
+          rot: -0.06,
+          color: '#ffd7a8',
         });
         break;
       }
