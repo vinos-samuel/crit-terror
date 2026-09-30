@@ -3,10 +3,17 @@ import {
   ENEMIES,
   GLUE_LINGER,
   GLUE_SLOW,
+  HOP_DIST,
+  HOP_DUR,
   INTERMISSION,
+  LEVELS,
+  POGO_HOP_DIST,
+  POGO_HOP_DUR,
+  REVIVE_HP,
+  REVIVE_PAUSE,
+  REVIVE_SPEED,
   ROWS,
   SHOOTER_COOLDOWN,
-  START_BRICKS,
   START_LIVES,
   STUD_DAMAGE,
   STUD_SPEED,
@@ -14,8 +21,9 @@ import {
   TRICKLE_AMOUNT,
   TRICKLE_EVERY,
   WAVE_BONUS,
-  WAVES,
   type EnemyKind,
+  type LevelId,
+  type Theme,
   type TowerKind,
 } from './config';
 
@@ -44,6 +52,17 @@ export interface Enemy {
   eating: boolean;
   hitT: number;
   age: number;
+  /** True after a Soft Blob has used its one revival. */
+  revived: boolean;
+  /** Seconds left in the "popping back up" pause. */
+  reviveT: number;
+  /** Speed multiplier. Revived blobs scurry. */
+  rage: number;
+  /** Seconds left in a hop arc. 0 when on the ground. */
+  hopT: number;
+  hopMax: number;
+  /** Lane column that already showed the beetle's glue shrug. */
+  shrugCol: number;
 }
 
 export interface Stud {
@@ -60,7 +79,10 @@ export type GameEvent =
   | { type: 'crunch'; row: number; col: number }
   | { type: 'waveStart'; wave: number }
   | { type: 'waveClear'; wave: number; bonus: number }
-  | { type: 'bricks'; amount: number };
+  | { type: 'bricks'; amount: number }
+  | { type: 'revive'; row: number; x: number }
+  | { type: 'hop'; row: number; x: number; kind: EnemyKind }
+  | { type: 'shrug'; row: number; x: number };
 
 export type Phase = 'ready' | 'wave' | 'intermission' | 'won' | 'lost';
 export type PlaceCheck = 'ok' | 'occupied' | 'bricks' | 'blocked';
@@ -74,8 +96,11 @@ interface Spawn {
 // Wave 1 teaches the game: critters stick to the middle lanes so a starter stash covers them.
 const FIRST_WAVE_ROWS = [2, 1, 3, 2, 1, 3];
 
+const LIGHT: EnemyKind[] = ['blob', 'roller', 'pogo'];
+const HEAVY: EnemyKind[] = ['beetle', 'crab'];
+
 export class Game {
-  bricks = START_BRICKS;
+  bricks: number;
   lives = START_LIVES;
   waveIndex = 0;
   phase: Phase = 'ready';
@@ -85,19 +110,34 @@ export class Game {
   events: GameEvent[] = [];
   intermissionT = 0;
   time = 0;
+  readonly levelId: LevelId;
   private spawns: Spawn[] = [];
   private waveTime = 0;
   private trickleT = 0;
   private nextId = 1;
   private rng: () => number;
 
-  constructor(rng: () => number = Math.random) {
+  constructor(rng: () => number = Math.random, levelId: LevelId = 1) {
     this.rng = rng;
+    this.levelId = levelId;
+    this.bricks = LEVELS[levelId].startBricks;
     this.grid = Array.from({ length: ROWS }, () => Array<Tower | null>(COLS).fill(null));
   }
 
+  get level() {
+    return LEVELS[this.levelId];
+  }
+
+  get theme(): Theme {
+    return this.level.theme;
+  }
+
+  get toolOrder(): TowerKind[] {
+    return this.level.tools;
+  }
+
   get totalWaves() {
-    return WAVES.length;
+    return this.level.waves.length;
   }
 
   get remaining() {
@@ -112,6 +152,7 @@ export class Game {
 
   canPlace(kind: TowerKind, row: number, col: number): PlaceCheck {
     if (this.phase === 'won' || this.phase === 'lost') return 'blocked';
+    if (!this.toolOrder.includes(kind)) return 'blocked';
     if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return 'blocked';
     if (this.grid[row][col]) return 'occupied';
     if (this.bricks < TOWERS[kind].cost) return 'bricks';
@@ -148,32 +189,43 @@ export class Game {
     this.events.push({ type: 'waveStart', wave: this.waveIndex });
   }
 
+  private countOf(def: { [K in EnemyKind]?: number }, kind: EnemyKind) {
+    return def[kind] ?? 0;
+  }
+
   private buildWave(index: number): Spawn[] {
-    const def = WAVES[index];
+    const def = this.level.waves[index];
     const light: EnemyKind[] = [];
-    for (let i = 0; i < def.blob; i++) light.push('blob');
-    for (let i = 0; i < def.roller; i++) light.push('roller');
+    for (const kind of LIGHT) {
+      for (let i = 0; i < this.countOf(def, kind); i++) light.push(kind);
+    }
     shuffle(light, this.rng);
-    // Beetles arrive in the back half so each wave ramps up.
+    // Heavy critters arrive in the back half so each wave ramps up.
     const kinds = [...light];
-    for (let i = 0; i < def.beetle; i++) {
-      const lo = Math.floor(kinds.length * 0.4);
-      const pos = lo + Math.floor(this.rng() * (kinds.length - lo + 1));
-      kinds.splice(pos, 0, 'beetle');
+    for (const kind of HEAVY) {
+      for (let i = 0; i < this.countOf(def, kind); i++) {
+        const lo = Math.floor(kinds.length * 0.4);
+        const pos = lo + Math.floor(this.rng() * (kinds.length - lo + 1));
+        kinds.splice(pos, 0, kind);
+      }
     }
     const out: Spawn[] = [];
     let t = 2;
     let lastRow = -1;
     let repeat = 0;
-    const finalPushFrom = index === WAVES.length - 1 ? Math.floor(kinds.length * 0.7) : Infinity;
+    const streakCap = this.level.rowStreak - 1;
+    const finalPushFrom = index === this.level.waves.length - 1 ? Math.floor(kinds.length * 0.7) : Infinity;
+    const hot = this.level.hotWaves > 0 && index >= this.level.waves.length - this.level.hotWaves;
     kinds.forEach((kind, i) => {
       let row: number;
       if (index === 0) {
         row = FIRST_WAVE_ROWS[i % FIRST_WAVE_ROWS.length];
+      } else if (hot && this.rng() < 0.62) {
+        row = 1 + Math.floor(this.rng() * 3);
       } else {
         do {
           row = Math.floor(this.rng() * ROWS);
-        } while (row === lastRow && repeat >= 1);
+        } while (row === lastRow && repeat >= streakCap);
       }
       repeat = row === lastRow ? repeat + 1 : 0;
       lastRow = row;
@@ -209,19 +261,7 @@ export class Game {
       }
       while (this.spawns.length && this.spawns[0].t <= this.waveTime) {
         const s = this.spawns.shift()!;
-        const stats = ENEMIES[s.kind];
-        this.enemies.push({
-          id: this.nextId++,
-          kind: s.kind,
-          row: s.row,
-          x: COLS + 0.45,
-          hp: stats.hp,
-          maxHp: stats.hp,
-          slowT: 0,
-          eating: false,
-          hitT: 0,
-          age: 0,
-        });
+        this.spawn(s.kind, s.row, COLS + 0.45);
       }
     }
 
@@ -230,7 +270,7 @@ export class Game {
     this.updateEnemies(dt);
 
     if (this.phase === 'wave' && this.spawns.length === 0 && this.enemies.length === 0) {
-      if (this.waveIndex >= WAVES.length - 1) {
+      if (this.waveIndex >= this.level.waves.length - 1) {
         this.phase = 'won';
       } else {
         this.bricks += WAVE_BONUS;
@@ -242,9 +282,49 @@ export class Game {
     }
   }
 
+  /** Used by the screenshot tableau to drop a critter in mid-animation. */
+  insertEnemy(kind: EnemyKind, row: number, x: number, extra: Partial<Enemy> = {}): Enemy {
+    return this.spawn(kind, row, x, extra);
+  }
+
+  private statsFor(kind: EnemyKind) {
+    const base = ENEMIES[kind];
+    const mod = this.level.enemyMods?.[kind];
+    return mod ? { ...base, ...mod } : base;
+  }
+
+  private spawn(kind: EnemyKind, row: number, x: number, extra: Partial<Enemy> = {}): Enemy {
+    const stats = this.statsFor(kind);
+    const enemy: Enemy = {
+      id: this.nextId++,
+      kind,
+      row,
+      x,
+      hp: stats.hp,
+      maxHp: stats.hp,
+      slowT: 0,
+      eating: false,
+      hitT: 0,
+      age: 0,
+      revived: false,
+      reviveT: 0,
+      rage: 1,
+      hopT: 0,
+      hopMax: 0,
+      shrugCol: -1,
+      ...extra,
+    };
+    this.enemies.push(enemy);
+    return enemy;
+  }
+
+  private shoots(kind: TowerKind) {
+    return kind === 'shooter' || kind === 'bastion';
+  }
+
   private updateTowers(dt: number) {
     for (const t of this.towers()) {
-      if (t.kind !== 'shooter') continue;
+      if (!this.shoots(t.kind)) continue;
       t.cooldown -= dt;
       if (t.cooldown > 0) continue;
       const target = this.enemies.some((e) => e.row === t.row && e.x > t.col + 0.3 && e.x < COLS - 0.05);
@@ -254,6 +334,26 @@ export class Game {
         t.recoil = 1;
       }
     }
+  }
+
+  private armorOf(target: Enemy) {
+    const stats = this.statsFor(target.kind);
+    if (!target.eating && stats.moveArmor !== undefined) return stats.moveArmor;
+    return stats.armor;
+  }
+
+  /** Soft Blob pops back up once. Returns true if this death was cancelled. */
+  private tryRevive(target: Enemy): boolean {
+    if (target.kind !== 'blob' || !this.level.powers.blobRevives || target.revived) return false;
+    const stats = this.statsFor('blob');
+    target.revived = true;
+    target.hp = Math.max(8, Math.round(stats.hp * REVIVE_HP));
+    target.reviveT = REVIVE_PAUSE;
+    target.rage = REVIVE_SPEED;
+    target.hitT = 0.2;
+    target.eating = false;
+    this.events.push({ type: 'revive', row: target.row, x: target.x });
+    return true;
   }
 
   private updateStuds(dt: number) {
@@ -266,11 +366,12 @@ export class Game {
         if (Math.abs(e.x - s.x) < 0.32 && (!target || e.x < target.x)) target = e;
       }
       if (target) {
-        const stats = ENEMIES[target.kind];
-        target.hp -= STUD_DAMAGE * stats.armor;
+        const stats = this.statsFor(target.kind);
+        const armor = this.armorOf(target);
+        target.hp -= STUD_DAMAGE * armor;
         target.hitT = 0.18;
-        this.events.push({ type: 'hit', row: s.row, x: target.x, armored: stats.armor < 1 });
-        if (target.hp <= 0) {
+        this.events.push({ type: 'hit', row: s.row, x: target.x, armored: armor < 1 });
+        if (target.hp <= 0 && !this.tryRevive(target)) {
           this.bricks += stats.reward;
           this.events.push({ type: 'kill', row: target.row, x: target.x, reward: stats.reward, kind: target.kind });
         }
@@ -292,30 +393,74 @@ export class Game {
     return null;
   }
 
+  private canHop(e: Enemy, blocker: Tower) {
+    if (e.kind === 'pogo') return true;
+    return e.kind === 'roller' && this.level.powers.rollerHopsWalls && blocker.kind === 'wall';
+  }
+
+  private beginHop(e: Enemy) {
+    const dur = e.kind === 'pogo' ? POGO_HOP_DUR : HOP_DUR;
+    e.hopT = dur;
+    e.hopMax = dur;
+    e.eating = false;
+    this.events.push({ type: 'hop', row: e.row, x: e.x, kind: e.kind });
+  }
+
+  private hopSpeed(e: Enemy) {
+    const dist = e.kind === 'pogo' ? POGO_HOP_DIST : HOP_DIST;
+    const dur = e.kind === 'pogo' ? POGO_HOP_DUR : HOP_DUR;
+    return dist / dur;
+  }
+
   private updateEnemies(dt: number) {
     const keep: Enemy[] = [];
     for (const e of this.enemies) {
-      const stats = ENEMIES[e.kind];
+      const stats = this.statsFor(e.kind);
       e.age += dt;
       e.hitT = Math.max(0, e.hitT - dt);
       e.slowT = Math.max(0, e.slowT - dt);
-      const col = Math.floor(e.x);
-      if (col >= 0 && col < COLS) {
-        const t = this.grid[e.row][col];
-        if (t?.kind === 'trap' && Math.abs(e.x - (col + 0.5)) < 0.45) e.slowT = GLUE_LINGER;
-      }
-      const blocker = this.blockerFor(e);
-      e.eating = !!blocker;
-      if (blocker) {
-        blocker.hp -= stats.dps * dt;
-        blocker.hitT = 0.12;
-        if (blocker.hp <= 0) {
-          this.grid[blocker.row][blocker.col] = null;
-          this.events.push({ type: 'crunch', row: blocker.row, col: blocker.col });
-        }
+
+      if (e.hopT > 0) {
+        e.hopT = Math.max(0, e.hopT - dt);
+        e.eating = false;
+        e.x -= this.hopSpeed(e) * dt;
+      } else if (e.reviveT > 0) {
+        e.reviveT = Math.max(0, e.reviveT - dt);
+        e.eating = false;
       } else {
-        e.x -= stats.speed * (e.slowT > 0 ? GLUE_SLOW : 1) * dt;
+        const col = Math.floor(e.x);
+        if (col >= 0 && col < COLS) {
+          const t = this.grid[e.row][col];
+          if (t?.kind === 'trap' && Math.abs(e.x - (col + 0.5)) < 0.45) {
+            const immune = e.kind === 'beetle' && this.level.powers.beetleGlueImmune;
+            if (immune) {
+              if (e.shrugCol !== col) {
+                e.shrugCol = col;
+                this.events.push({ type: 'shrug', row: e.row, x: e.x });
+              }
+            } else {
+              e.slowT = GLUE_LINGER;
+            }
+          }
+        }
+        const blocker = this.blockerFor(e);
+        if (blocker && this.canHop(e, blocker)) {
+          this.beginHop(e);
+        } else {
+          e.eating = !!blocker;
+          if (blocker) {
+            blocker.hp -= stats.dps * dt;
+            blocker.hitT = 0.12;
+            if (blocker.hp <= 0) {
+              this.grid[blocker.row][blocker.col] = null;
+              this.events.push({ type: 'crunch', row: blocker.row, col: blocker.col });
+            }
+          } else {
+            e.x -= stats.speed * e.rage * (e.slowT > 0 ? GLUE_SLOW : 1) * dt;
+          }
+        }
       }
+
       if (e.x < -0.4) {
         this.lives--;
         this.events.push({ type: 'leak', row: e.row });
@@ -342,4 +487,55 @@ function shuffle<T>(arr: T[], rng: () => number) {
     const j = Math.floor(rng() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
+}
+
+/**
+ * A still scene for screenshots: towers down, powers mid-animation, sim not required to be running.
+ * Bricks are topped up so the tableau can place a full lane of towers.
+ */
+export function makeShowcase(levelId: 2 | 3): Game {
+  const g = new Game(() => 0.5, levelId);
+  g.bricks = 4000;
+  if (levelId === 2) {
+    for (const row of [0, 1, 2, 3, 4]) {
+      g.place('shooter', row, 1);
+      g.place('wall', row, 4);
+      g.place('trap', row, 6);
+    }
+    g.place('shooter', 2, 2);
+    g.insertEnemy('roller', 2, 4.92, { hopT: HOP_DUR * 0.55, hopMax: HOP_DUR, age: 1.6 });
+    g.insertEnemy('beetle', 1, 6.5, { age: 2.1, shrugCol: 6 });
+    g.insertEnemy('blob', 3, 3.15, {
+      age: 2.4,
+      revived: true,
+      reviveT: REVIVE_PAUSE * 0.72,
+      rage: REVIVE_SPEED,
+      hp: Math.round(ENEMIES.blob.hp * REVIVE_HP),
+    });
+    g.insertEnemy('blob', 0, 7.6, { age: 1.1 });
+    g.insertEnemy('roller', 4, 8.15, { age: 0.8 });
+    g.studs.push({ id: 9001, row: 2, x: 3.15 });
+  } else {
+    for (const row of [0, 1, 2, 3, 4]) {
+      g.place('bastion', row, 2);
+      g.place('trap', row, 5);
+    }
+    g.place('wall', 2, 4);
+    g.place('bastion', 1, 1);
+    g.insertEnemy('pogo', 1, 2.95, { hopT: POGO_HOP_DUR * 0.5, hopMax: POGO_HOP_DUR, age: 1.8 });
+    g.insertEnemy('crab', 2, 4.2, { eating: true, age: 3, hp: 110 });
+    g.insertEnemy('crab', 3, 7.35, { age: 1.2 });
+    g.insertEnemy('pogo', 0, 6.5, { age: 0.9 });
+    g.insertEnemy('beetle', 4, 5.5, { age: 1.7, shrugCol: 5 });
+    g.insertEnemy('blob', 1, 8.2, { age: 0.6 });
+    g.studs.push({ id: 9002, row: 1, x: 2.7 });
+    g.studs.push({ id: 9003, row: 2, x: 3.4 });
+  }
+  for (const t of g.towers()) t.placedT = 8;
+  g.bricks = levelId === 2 ? 85 : 110;
+  g.lives = 2;
+  g.waveIndex = levelId === 2 ? 2 : 3;
+  g.phase = 'wave';
+  g.events = [];
+  return g;
 }

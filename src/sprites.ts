@@ -19,6 +19,15 @@ export const PAL = {
   white: '#fffdf7',
   pink: '#f4a4a4',
   mouth: '#b8434a',
+  orange: '#f4a05a',
+  orangeDark: '#d4783a',
+  orangeHi: '#ffd7a8',
+  crab: '#ef7d6a',
+  crabDark: '#c45448',
+  crabHi: '#ffc3b6',
+  slate: '#8e9aab',
+  slateDark: '#5e6b7c',
+  slateHi: '#d5dde6',
 };
 
 export type SpriteName =
@@ -32,6 +41,13 @@ export type SpriteName =
   | 'beetleB'
   | 'rollerBody'
   | 'rollerWheel'
+  | 'bastion0'
+  | 'bastion1'
+  | 'bastion2'
+  | 'pogoA'
+  | 'pogoB'
+  | 'crabWalk'
+  | 'crabChomp'
   | 'brickIcon'
   | 'heart'
   | 'heartEmpty'
@@ -454,6 +470,155 @@ const drawStud: Drawer = (ctx, rng) => {
   shape(ctx, ellipsePts(38, 36, 13, 9, 12), rng, { fill: 'rgba(255,255,255,0.75)', stroke: 'none' });
 };
 
+function drawBastion(damage: number): Drawer {
+  return (ctx, rng) => {
+    ground(ctx, rng, 50, 90, 42);
+    brickBlock(ctx, rng, 8, 48, 74, 38, 8, { front: PAL.red, top: PAL.redTop, side: PAL.redSide }, 4);
+    mortar(ctx, rng, 8, 48, 74, 38, 2);
+    brickBlock(ctx, rng, 24, 24, 38, 26, 7, { front: PAL.blue, top: PAL.blueTop, side: PAL.blueSide }, 2);
+    const barrel = rectPts(58, 28, 26, 13, 3);
+    shape(ctx, barrel, rng, { fill: PAL.gray, lw: 2.6 });
+    hatch(ctx, rectPts(58, 34, 26, 6), rng, INK, 4, 1, 0.35);
+    shape(ctx, rectPts(80, 25, 9, 19, 2), rng, { fill: PAL.grayDark, lw: 2.6 });
+    shape(ctx, ellipsePts(88, 34, 3, 6, 10), rng, { fill: INK, lw: 1.6, sketch: false });
+    shape(ctx, ellipsePts(36, 20, 5, 5, 10), rng, { fill: PAL.yellow, lw: 2, sketch: false });
+    eye(ctx, rng, 30, 64, 5.2, 0.7, 0, 0.5);
+    eye(ctx, rng, 48, 64, 5.2, 0.7, 0, 0.5);
+    if (damage >= 1) {
+      crack(ctx, rng, 16, 52, 28);
+      crack(ctx, rng, 70, 66, 20);
+    }
+    if (damage >= 2) {
+      crack(ctx, rng, 40, 50, 40);
+      crack(ctx, rng, 18, 74, 18);
+      line(ctx, [{ x: 22, y: 56 }, { x: 36, y: 59 }], rng, 2.2);
+      line(ctx, [{ x: 56, y: 56 }, { x: 42, y: 59 }], rng, 2.2);
+    }
+  };
+}
+
+/** Spring frame: 0 extended, 1 squashed. */
+function drawPogo(squashed: boolean): Drawer {
+  return (ctx, rng) => {
+    const drop = squashed ? 10 : 0;
+    const coils = squashed ? 2 : 4;
+    ground(ctx, rng, 50, 92, 28);
+    ctx.save();
+    let y = 88;
+    const top = squashed ? 70 : 58;
+    const step = (y - top) / coils;
+    for (let i = 0; i < coils; i++) {
+      const left = i % 2 === 0;
+      const ny = y - step;
+      line(
+        ctx,
+        [
+          { x: 50, y },
+          { x: left ? 32 : 68, y: y - step * 0.5 },
+          { x: 50, y: ny },
+        ],
+        rng,
+        4.2,
+        PAL.orangeDark,
+        0.5,
+      );
+      y = ny;
+    }
+    ctx.restore();
+    const by = 48 + drop;
+    const body = ellipsePts(50, by, 26, 22, 22);
+    shape(ctx, body, rng, { fill: PAL.orange, lw: 3.4 });
+    hatch(ctx, ellipsePts(58, by + 8, 16, 12, 14), rng, PAL.orangeDark, 4.5, 1.1, 0.45);
+    shape(ctx, ellipsePts(40, by - 10, 8, 4, 10), rng, { fill: PAL.orangeHi, stroke: 'none' });
+    const mohawk: Pt[] = [
+      { x: 36, y: by - 16 },
+      { x: 40, y: by - 34 },
+      { x: 48, y: by - 18 },
+      { x: 52, y: by - 38 },
+      { x: 60, y: by - 16 },
+      { x: 64, y: by - 30 },
+      { x: 68, y: by - 14 },
+    ];
+    shape(ctx, mohawk, rng, { fill: '#f27b9c', lw: 2.6, sketch: false, step: 6 });
+    eye(ctx, rng, 40, by - 2, 6.2, -0.7, 0, 0.5);
+    eye(ctx, rng, 58, by - 2, 6.2, -0.7, 0, 0.5);
+    const grin: Pt[] = [
+      { x: 38, y: by + 8 },
+      { x: 62, y: by + 8 },
+      { x: 58, y: by + 16 },
+      { x: 42, y: by + 16 },
+    ];
+    shape(ctx, grin, rng, { fill: PAL.mouth, lw: 2.2, sketch: false, step: 6 });
+    ctx.fillStyle = PAL.white;
+    ctx.beginPath();
+    ctx.moveTo(44, by + 9);
+    ctx.lineTo(48, by + 9);
+    ctx.lineTo(46, by + 13);
+    ctx.closePath();
+    ctx.fill();
+    line(ctx, [{ x: 24, y: by + 4 }, { x: 12, y: by - 6 }, { x: 8, y: by + 2 }], rng, 3);
+    line(ctx, [{ x: 74, y: by + 2 }, { x: 86, y: by - 8 }, { x: 90, y: by }], rng, 3);
+  };
+}
+
+function drawCrab(chomp: boolean): Drawer {
+  return (ctx, rng) => {
+    ground(ctx, rng, 52, 92, 40);
+    const claw = (side: number) => {
+      const open = chomp ? 14 : 4;
+      const cx = 50 + side * 34;
+      const cy = 58;
+      const shell: Pt[] = [
+        { x: cx, y: cy - 6 },
+        { x: cx + side * 16, y: cy - 16 - open * 0.3 },
+        { x: cx + side * 28, y: cy - 8 - open },
+        { x: cx + side * 24, y: cy + 2 },
+        { x: cx + side * 30, y: cy + 8 + open },
+        { x: cx + side * 16, y: cy + 14 },
+        { x: cx + side * 4, y: cy + 6 },
+      ];
+      shape(ctx, shell, rng, { fill: PAL.crab, lw: 3, sketch: false, step: 7 });
+      line(
+        ctx,
+        [
+          { x: cx + side * 18, y: cy - 4 },
+          { x: cx + side * 26, y: cy + 1 },
+        ],
+        rng,
+        2.2,
+      );
+    };
+    claw(-1);
+    claw(1);
+    for (const lx of [30, 44, 60, 74]) {
+      const swing = chomp ? 0 : lx % 20 === 0 ? 4 : -3;
+      line(ctx, [{ x: lx, y: 70 }, { x: lx + swing, y: 84 }, { x: lx + swing - 4, y: 90 }], rng, 3.2);
+    }
+    const body = ellipsePts(50, 58, 32, 22, 24);
+    shape(ctx, body, rng, { fill: PAL.crab, lw: 3.4 });
+    hatch(ctx, ellipsePts(50, 66, 28, 12, 16), rng, PAL.crabDark, 5, 1.2, 0.4);
+    shape(ctx, ellipsePts(42, 48, 16, 7, 12), rng, { fill: PAL.crabHi, stroke: 'none' });
+    line(ctx, [{ x: 34, y: 52 }, { x: 66, y: 54 }], rng, 2, INK);
+    const stalk = (x: number) => {
+      line(ctx, [{ x, y: 44 }, { x: x - 2, y: 30 }], rng, 3);
+      eye(ctx, rng, x - 3, 26, 5.4, -0.6, 0, 0.55);
+    };
+    stalk(40);
+    stalk(62);
+    if (chomp) {
+      const mouth: Pt[] = [
+        { x: 40, y: 64 },
+        { x: 60, y: 64 },
+        { x: 56, y: 74 },
+        { x: 44, y: 74 },
+      ];
+      shape(ctx, mouth, rng, { fill: PAL.mouth, lw: 2.2, sketch: false, step: 5 });
+    } else {
+      line(ctx, [{ x: 40, y: 66 }, { x: 60, y: 66 }], rng, 2.6);
+    }
+  };
+}
+
 const DRAWERS: Record<SpriteName, Drawer> = {
   wall0: drawWall(0),
   wall1: drawWall(1),
@@ -465,6 +630,13 @@ const DRAWERS: Record<SpriteName, Drawer> = {
   beetleB: drawBeetle(1),
   rollerBody: drawRollerBody,
   rollerWheel: drawRollerWheel,
+  bastion0: drawBastion(0),
+  bastion1: drawBastion(1),
+  bastion2: drawBastion(2),
+  pogoA: drawPogo(false),
+  pogoB: drawPogo(true),
+  crabWalk: drawCrab(false),
+  crabChomp: drawCrab(true),
   brickIcon: drawBrickIcon,
   heart: drawHeart,
   heartEmpty: drawHeartEmpty,

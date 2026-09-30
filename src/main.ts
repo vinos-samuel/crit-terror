@@ -1,10 +1,10 @@
 import '@fontsource/luckiest-guy/400.css';
 import '@fontsource/patrick-hand/400.css';
 import './style.css';
-import { TOOL_ORDER, TOWERS, type TowerKind } from './config';
+import { LEVELS, TOWERS, type LevelId, type TowerKind } from './config';
 import { cellAt, hit } from './layout';
 import { overlayLayout, Renderer, titleLayout, type Effect, type ViewState } from './render';
-import { Game, type GameEvent } from './sim';
+import { Game, makeShowcase, type GameEvent } from './sim';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
 const renderer = new Renderer(canvas);
@@ -21,16 +21,19 @@ const view: ViewState = {
   shakeT: 0,
   denyTool: null,
   time: 0,
+  hold: false,
 };
 
-function newGame() {
-  view.game = new Game();
+function newGame(level: LevelId = view.game.levelId) {
+  view.game = new Game(Math.random, level);
   view.paused = false;
   view.selected = null;
   view.effects = [];
   view.toast = null;
   view.shakeT = 0;
+  view.hold = false;
   view.screen = 'play';
+  renderer.setTheme(view.game.theme);
 }
 
 function toast(text: string) {
@@ -95,7 +98,7 @@ function handleEvents(events: GameEvent[]) {
           dur: 0.7,
           size: size * 0.3,
           rot: (Math.random() - 0.5) * 0.4,
-          color: e.kind === 'beetle' ? '#cbb8f0' : e.kind === 'roller' ? '#fde99a' : '#c8ec9f',
+          color: e.kind === 'beetle' ? '#cbb8f0' : e.kind === 'roller' ? '#fde99a' : e.kind === 'pogo' ? '#ffc2a1' : e.kind === 'crab' ? '#f4a19a' : '#c8ec9f',
         });
         addEffect({
           kind: 'float',
@@ -151,7 +154,44 @@ function handleEvents(events: GameEvent[]) {
           color: '#f4a19a',
         });
         break;
+      case 'revive':
+        addEffect({
+          kind: 'word',
+          text: 'AGAIN!',
+          x: L.lawn.x + e.x * L.cellW,
+          y: laneY(e.row) - size * 0.35,
+          dur: 0.8,
+          size: size * 0.28,
+          rot: -0.08,
+          color: '#c8ec9f',
+        });
+        break;
+      case 'hop':
+        addEffect({
+          kind: 'word',
+          text: e.kind === 'pogo' ? 'BOING!' : 'HOP!',
+          x: L.lawn.x + e.x * L.cellW,
+          y: laneY(e.row) - size * 0.85,
+          dur: 0.55,
+          size: size * 0.22,
+          rot: 0.08,
+          color: e.kind === 'pogo' ? '#ffc2a1' : '#fde99a',
+        });
+        break;
+      case 'shrug':
+        addEffect({
+          kind: 'word',
+          text: 'NOPE!',
+          x: L.lawn.x + e.x * L.cellW,
+          y: laneY(e.row) - size * 0.7,
+          dur: 0.6,
+          size: size * 0.22,
+          rot: -0.1,
+          color: '#f8d55a',
+        });
+        break;
       case 'waveStart':
+        if (e.wave === 0 && view.game.levelId > 1) toast(view.game.level.intro);
         addEffect({
           kind: 'word',
           text: e.wave === view.game.totalWaves - 1 ? 'FINAL WAVE!' : `WAVE ${e.wave + 1}!`,
@@ -201,16 +241,21 @@ function handleEvents(events: GameEvent[]) {
 
 function uiTargetAt(x: number, y: number): string | null {
   const L = renderer.L;
-  if (view.screen === 'title') return hit(titleLayout(L).play, x, y, 6) ? 'play' : null;
+  if (view.screen === 'title') {
+    const levels = titleLayout(L).levels;
+    for (let i = 0; i < levels.length; i++) if (hit(levels[i], x, y, 6)) return `level${i + 1}`;
+    return null;
+  }
   const g = view.game;
   if (g.phase === 'won' || g.phase === 'lost' || view.paused) {
     const kind = g.phase === 'won' || g.phase === 'lost' ? g.phase : 'pause';
-    for (const b of overlayLayout(L, kind).buttons) if (hit(b.rect, x, y, 6)) return b.id;
+    const offerNext = kind === 'won' && g.levelId < 3;
+    for (const b of overlayLayout(L, kind, offerNext).buttons) if (hit(b.rect, x, y, 6)) return b.id;
     return null;
   }
   if (hit(L.pauseBtn, x, y, 6)) return 'pause';
   if (hit(L.startBtn, x, y, 6)) return 'start';
-  for (const k of TOOL_ORDER) if (hit(L.tools[k], x, y, 8)) return k;
+  for (const k of g.toolOrder) if (hit(L.tools[k], x, y, 8)) return k;
   return null;
 }
 
@@ -219,12 +264,24 @@ function onPointerDown(ev: PointerEvent) {
   const { x, y } = renderer.toDesign(ev.clientX, ev.clientY);
   const target = uiTargetAt(x, y);
   switch (target) {
-    case 'play':
+    case 'level1':
+      newGame(1);
+      return;
+    case 'level2':
+      newGame(2);
+      return;
+    case 'level3':
+      newGame(3);
+      return;
+    case 'next':
+      newGame((view.game.levelId + 1) as LevelId);
+      return;
     case 'restart':
       newGame();
       return;
     case 'menu':
       view.screen = 'title';
+      view.paused = false;
       return;
     case 'resume':
     case 'pause':
@@ -233,11 +290,11 @@ function onPointerDown(ev: PointerEvent) {
     case 'start':
       startWave();
       return;
-    case 'wall':
-    case 'shooter':
-    case 'trap':
-      selectTool(target);
-      return;
+    default:
+      if (target && (view.game.toolOrder as readonly string[]).includes(target)) {
+        selectTool(target as TowerKind);
+        return;
+      }
   }
   if (view.screen !== 'play' || view.paused) return;
   const g = view.game;
@@ -267,11 +324,17 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
   if (view.screen === 'title') {
-    if (e.key === 'Enter' || e.key === ' ') newGame();
+    if (e.key === '1' || e.key === 'Enter') newGame(1);
+    else if (e.key === '2') newGame(2);
+    else if (e.key === '3') newGame(3);
     return;
   }
   const g = view.game;
   if (g.phase === 'won' || g.phase === 'lost') {
+    if (e.key === 'n' || e.key === 'N') {
+      if (g.phase === 'won' && g.levelId < 3) newGame((g.levelId + 1) as LevelId);
+      return;
+    }
     if (e.key === 'Enter' || e.key === 'r' || e.key === 'R') newGame();
     return;
   }
@@ -280,9 +343,10 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (view.paused) return;
-  if (e.key === '1') selectTool('wall');
-  else if (e.key === '2') selectTool('shooter');
-  else if (e.key === '3') selectTool('trap');
+  const tools = g.toolOrder;
+  if (e.key === '1' && tools[0]) selectTool(tools[0]);
+  else if (e.key === '2' && tools[1]) selectTool(tools[1]);
+  else if (e.key === '3' && tools[2]) selectTool(tools[2]);
   else if (e.key === ' ' || e.key === 'Enter') {
     e.preventDefault();
     startWave();
@@ -303,7 +367,7 @@ function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   view.time += dt;
-  if (view.screen === 'play' && !view.paused) {
+  if (view.screen === 'play' && !view.paused && !view.hold) {
     view.game.update(dt);
     handleEvents(view.game.drainEvents());
   }
@@ -335,6 +399,15 @@ async function boot() {
   ]).catch(() => undefined);
   await Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))]);
   renderer.resize();
+  const shot = new URLSearchParams(location.search).get('shot');
+  if (shot === '2' || shot === '3') {
+    const level = shot === '2' ? 2 : 3;
+    view.game = makeShowcase(level);
+    view.screen = 'play';
+    view.hold = true;
+    view.paused = false;
+    renderer.setTheme(LEVELS[level].theme);
+  }
   document.body.classList.add('ready');
   requestAnimationFrame((t) => {
     last = t;

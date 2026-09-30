@@ -1,4 +1,4 @@
-import { COLS, ENEMIES, GAME_TITLE, ROWS, TOOL_ORDER, TOWERS, type TowerKind } from './config';
+import { COLS, ENEMIES, GAME_TITLE, LEVELS, LEVEL_IDS, ROWS, TOWERS, type LevelId, type Theme, type TowerKind } from './config';
 import {
   ellipsePts,
   hatch,
@@ -45,6 +45,8 @@ export interface ViewState {
   shakeT: number;
   denyTool: { kind: TowerKind; t: number } | null;
   time: number;
+  /** When set, the scene draws but the sim does not advance (screenshot tableaus). */
+  hold: boolean;
 }
 
 export interface UiButton {
@@ -63,57 +65,70 @@ export function titleLayout(L: Layout) {
   if (L.portrait) {
     const oy = (L.H - 1180) / 2;
     const pw = 330;
-    const ph = 236;
+    const ph = 196;
     const panels: Rect[] = [];
     for (let i = 0; i < 6; i++) {
       const col = i < 3 ? 0 : 1;
       const row = i % 3;
-      panels.push({ x: 20 + col * (pw + 20), y: oy + 236 + row * (ph + 18), w: pw, h: ph });
+      panels.push({ x: 20 + col * (pw + 20), y: oy + 164 + row * (ph + 8), w: pw, h: ph });
     }
+    const levels: Rect[] = LEVEL_IDS.map((_, i) => ({ x: 48, y: oy + 792 + i * 92, w: 624, h: 82 }));
     return {
-      banner: { x: 40, y: oy + 40, w: 640, h: 118 },
-      subtitle: { x: 360, y: oy + 190 },
+      banner: { x: 40, y: oy + 20, w: 640, h: 104 },
+      subtitle: { x: 360, y: oy + 142 },
       panels,
-      play: { x: 190, y: oy + 1006, w: 340, h: 116 },
-      footer: { x: 360, y: oy + 1150 },
+      levels,
+      footer: { x: 360, y: oy + 1108 },
     };
   }
   const pw = 384;
-  const ph = 178;
+  const ph = 164;
   const panels: Rect[] = [];
   for (let i = 0; i < 6; i++) {
     const col = i % 3;
     const row = Math.floor(i / 3);
-    panels.push({ x: 40 + col * (pw + 24), y: 168 + row * (ph + 18), w: pw, h: ph });
+    panels.push({ x: 40 + col * (pw + 24), y: 136 + row * (ph + 10), w: pw, h: ph });
   }
+  const gap = 18;
+  const lw = (1280 - 80 - gap * 2) / 3;
+  const levels: Rect[] = LEVEL_IDS.map((_, i) => ({ x: 40 + i * (lw + gap), y: 496, w: lw, h: 108 }));
   return {
-    banner: { x: 290, y: 16, w: 700, h: 110 },
-    subtitle: { x: 640, y: 144 },
+    banner: { x: 290, y: 8, w: 700, h: 100 },
+    subtitle: { x: 640, y: 122 },
     panels,
-    play: { x: 490, y: 566, w: 300, h: 104 },
-    footer: { x: 640, y: 698 },
+    levels,
+    footer: { x: 640, y: 688 },
   };
 }
 
-export function overlayLayout(L: Layout, kind: 'pause' | 'won' | 'lost') {
-  const pw = 640;
-  const ph = L.portrait ? 560 : 460;
+export function overlayLayout(L: Layout, kind: 'pause' | 'won' | 'lost', offerNext = false) {
+  const pw = 660;
+  const extra = kind === 'won' && offerNext ? 110 : 0;
+  const ph = (L.portrait ? 560 : 480) + extra;
   const panel: Rect = { x: (L.W - pw) / 2, y: (L.H - ph) / 2, w: pw, h: ph };
-  const bw = 262;
-  const bh = 96;
-  const by = panel.y + ph - bh - 32;
-  const left: Rect = { x: panel.x + pw / 2 - bw - 14, y: by, w: bw, h: bh };
-  const right: Rect = { x: panel.x + pw / 2 + 14, y: by, w: bw, h: bh };
-  const buttons: UiButton[] =
-    kind === 'pause'
-      ? [
-          { id: 'resume', label: 'Resume', color: GREEN_BTN, rect: left },
-          { id: 'restart', label: 'Restart', color: PAL.red, rect: right },
-        ]
-      : [
-          { id: 'restart', label: kind === 'won' ? 'Play Again' : 'Try Again', color: PAL.blue, rect: left },
-          { id: 'menu', label: 'Menu', color: PAL.yellow, rect: right },
-        ];
+  const bw = 250;
+  const bh = 90;
+  const by = panel.y + ph - bh - 28;
+  const left: Rect = { x: panel.x + pw / 2 - bw - 12, y: by, w: bw, h: bh };
+  const right: Rect = { x: panel.x + pw / 2 + 12, y: by, w: bw, h: bh };
+  let buttons: UiButton[];
+  if (kind === 'pause') {
+    buttons = [
+      { id: 'resume', label: 'Resume', color: GREEN_BTN, rect: left },
+      { id: 'restart', label: 'Restart', color: PAL.red, rect: right },
+    ];
+  } else if (kind === 'won' && offerNext) {
+    buttons = [
+      { id: 'next', label: 'Next Level', color: GREEN_BTN, rect: { x: panel.x + 48, y: by - bh - 14, w: pw - 96, h: bh } },
+      { id: 'restart', label: 'Replay', color: PAL.blue, rect: left },
+      { id: 'menu', label: 'Levels', color: PAL.yellow, rect: right },
+    ];
+  } else {
+    buttons = [
+      { id: 'restart', label: kind === 'won' ? 'Play Again' : 'Try Again', color: PAL.blue, rect: left },
+      { id: 'menu', label: 'Levels', color: PAL.yellow, rect: right },
+    ];
+  }
   return { panel, buttons };
 }
 
@@ -121,6 +136,7 @@ export class Renderer {
   readonly canvas: HTMLCanvasElement;
   readonly ctx: CanvasRenderingContext2D;
   L: Layout = pickLayout(1280, 720);
+  theme: Theme = 'lawn';
   dpr = 1;
   cssW = 1280;
   cssH = 720;
@@ -149,6 +165,12 @@ export class Renderer {
     this.offY = (this.cssH - this.L.H * this.scale) / 2;
     clearSpriteCache();
     this.buildStatic();
+  }
+
+  setTheme(theme: Theme) {
+    if (this.theme === theme && this.fieldLayer.width === this.canvas.width && this.canvas.width > 0) return;
+    this.theme = theme;
+    if (this.canvas.width > 0) this.buildStatic();
   }
 
   toDesign(clientX: number, clientY: number) {
@@ -181,9 +203,10 @@ export class Renderer {
     fctx.drawImage(this.paperLayer, 0, 0);
     this.designTransform(fctx);
     const L = this.L;
-    drawFortress(fctx, L, mulberry32(11));
-    drawLawn(fctx, L, mulberry32(21));
-    drawRift(fctx, L, mulberry32(31));
+    const theme = this.theme;
+    drawFortress(fctx, L, mulberry32(theme === 'quarry' ? 17 : 11), theme);
+    drawLawn(fctx, L, mulberry32(theme === 'quarry' ? 27 : 21), theme);
+    drawRift(fctx, L, mulberry32(theme === 'quarry' ? 37 : 31), theme);
     this.drawBanner(fctx, L.banner, mulberry32(41));
   }
 
@@ -243,8 +266,8 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawRoller(cx: number, bottom: number, size: number, frame: number, spin: number, alpha = 1) {
-    this.drawSprite('rollerBody', cx, bottom, size, frame, { alpha });
+  private drawRoller(cx: number, bottom: number, size: number, frame: number, spin: number, alpha = 1, rot = 0) {
+    this.drawSprite('rollerBody', cx, bottom, size, frame, { alpha, rot });
     const ctx = this.ctx;
     const wheel = size * 0.44;
     const wx = cx + size * 0.12;
@@ -273,7 +296,7 @@ export class Renderer {
     const t = v.time;
     const frame = this.boil(t);
 
-    this.drawRiftArrows(t);
+    this.drawRiftArrows(t, g.theme);
 
     if (v.selected && g.phase !== 'won' && g.phase !== 'lost') {
       ctx.save();
@@ -314,7 +337,7 @@ export class Renderer {
         if (tw && tw.kind !== 'trap') this.drawTower(tw, size, frame);
       }
       const inRow = g.enemies.filter((e) => e.row === r).sort((a, b) => b.x - a.x);
-      for (const e of inRow) this.drawEnemy(e, size, frame);
+      for (const e of inRow) this.drawEnemy(e, size, frame, g);
     }
 
     for (const s of g.studs) {
@@ -332,8 +355,9 @@ export class Renderer {
   }
 
   private drawTowerSprite(kind: TowerKind, cx: number, bottom: number, size: number, frame: number, hpRatio: number, alpha?: number) {
-    let name: SpriteName = kind === 'wall' ? 'wall0' : kind;
+    let name: SpriteName = kind === 'wall' ? 'wall0' : kind === 'bastion' ? 'bastion0' : kind;
     if (kind === 'wall') name = hpRatio < 0.34 ? 'wall2' : hpRatio < 0.67 ? 'wall1' : 'wall0';
+    if (kind === 'bastion') name = hpRatio < 0.34 ? 'bastion2' : hpRatio < 0.67 ? 'bastion1' : 'bastion0';
     const o = alpha === undefined ? {} : { alpha };
     if (kind === 'trap') this.drawSprite(name, cx, bottom + size * 0.06, size * 0.96, frame, o);
     else this.drawSprite(name, cx, bottom, size, frame, o);
@@ -345,14 +369,14 @@ export class Renderer {
     const bottom = this.cellBottom(tw.row);
     const ratio = tw.hp / tw.maxHp;
     if (tw.hitT > 0) cx += Math.sin(tw.placedT * 70) * 1.8;
-    if (tw.kind === 'shooter') cx -= tw.recoil * 4;
+    if (tw.kind === 'shooter' || tw.kind === 'bastion') cx -= tw.recoil * 4;
     const pop = tw.placedT < 0.3 ? 1 + Math.sin((tw.placedT / 0.3) * Math.PI) * 0.18 : 1;
     this.ctx.save();
     this.ctx.translate(cx, bottom);
     this.ctx.scale(pop, 2 - pop);
     this.drawTowerSprite(tw.kind, 0, 0, size, frame, ratio);
     this.ctx.restore();
-    if (tw.kind === 'shooter' && tw.recoil > 0.6) {
+    if ((tw.kind === 'shooter' || tw.kind === 'bastion') && tw.recoil > 0.6) {
       const mx = cx + size * 0.44;
       const my = bottom - size * 0.46;
       shape(this.ctx, starburstPts(mx, my, size * 0.12, size * 0.05, 6, mulberry32(tw.id + frame)), mulberry32(3), {
@@ -378,37 +402,75 @@ export class Renderer {
     this.ctx.restore();
   }
 
-  private drawEnemy(e: Enemy, size: number, frame: number) {
+  private drawEnemy(e: Enemy, size: number, frame: number, g: Game) {
     const L = this.L;
-    const stats = ENEMIES[e.kind];
     let cx = L.lawn.x + e.x * L.cellW;
-    let bottom = this.cellBottom(e.row);
+    const ground = this.cellBottom(e.row);
+    let bottom = ground;
     const slow = e.slowT > 0 ? 0.45 : 1;
-    const a = e.age * slow;
+    const a = e.age * e.rage * slow;
     let sx = 1;
     let sy = 1;
     let rot = 0;
+    let lift = 0;
+    if (e.hopT > 0 && e.hopMax > 0) {
+      const p = 1 - e.hopT / e.hopMax;
+      lift = Math.sin(Math.PI * p) * size * (e.kind === 'pogo' ? 0.72 : 0.48);
+      bottom -= lift;
+      rot = (e.kind === 'pogo' ? -0.35 : -0.55) * Math.sin(Math.PI * p);
+    }
     if (e.hitT > 0) {
       cx += (e.hitT / 0.18) * 4;
       sx = 1.08;
       sy = 0.92;
     }
+    if (e.reviveT > 0) {
+      const k = 0.5 + 0.5 * Math.sin(e.reviveT * 28);
+      sx *= 1 + k * 0.16;
+      sy *= 1 - k * 0.12;
+    }
     const alpha = e.x > COLS + 0.1 ? Math.max(0.35, 1 - (e.x - COLS - 0.1) * 2) : 1;
+    if (lift > 4) {
+      this.ctx.save();
+      this.ctx.globalAlpha = 0.28 * alpha;
+      shape(this.ctx, ellipsePts(cx, ground - 2, size * 0.28, size * 0.07, 12), mulberry32(e.id + 3), {
+        fill: INK,
+        stroke: 'none',
+      });
+      this.ctx.restore();
+    }
     if (e.kind === 'blob') {
       const hop = Math.abs(Math.sin(a * 5 + e.id));
-      bottom -= e.eating ? 0 : hop * size * 0.08;
+      bottom -= e.eating || lift > 0 ? 0 : hop * size * 0.08;
       const squash = e.eating ? Math.sin(a * 12) * 0.06 : (1 - hop) * 0.12;
       sx *= 1 + squash;
       sy *= 1 - squash;
-      this.drawSprite('blob', cx, bottom, size * 0.86, frame, { sx, sy, alpha });
+      if (e.reviveT > 0) {
+        this.ctx.save();
+        this.ctx.globalAlpha = 0.45;
+        shape(this.ctx, starburstPts(cx, bottom - size * 0.4, size * 0.42, size * 0.22, 10, mulberry32(e.id + frame), 0.7), mulberry32(4), {
+          fill: '#d8f5b0',
+          lw: 2,
+          sketch: false,
+        });
+        this.ctx.restore();
+      }
+      this.drawSprite('blob', cx, bottom, size * 0.86, frame, { sx, sy, alpha, rot });
     } else if (e.kind === 'beetle') {
-      if (e.eating) rot = Math.sin(a * 10) * 0.06;
+      if (e.eating) rot += Math.sin(a * 10) * 0.06;
       const step = Math.floor(a * 6) % 2 === 0 ? 'beetleA' : 'beetleB';
       this.drawSprite(e.eating ? 'beetleA' : step, cx, bottom, size * 1.02, frame, { sx, sy, rot, alpha });
+    } else if (e.kind === 'pogo') {
+      const sprung = lift > size * 0.2 || Math.floor(a * 7) % 2 === 0;
+      this.drawSprite(sprung ? 'pogoA' : 'pogoB', cx, bottom, size * 0.98, frame, { sx, sy, rot, alpha });
+    } else if (e.kind === 'crab') {
+      if (e.eating) rot += Math.sin(a * 14) * 0.05;
+      const bob = e.eating ? 0 : Math.abs(Math.sin(a * 6)) * 2;
+      this.drawSprite(e.eating ? 'crabChomp' : 'crabWalk', cx, bottom + bob, size * 1.05, frame, { sx, sy, rot, alpha });
     } else {
       const spinR = size * 0.22;
-      const spin = (cx - L.lawn.x) / spinR;
-      if (!e.eating) {
+      const spin = lift > 0 ? -e.hopT * 18 : (cx - L.lawn.x) / spinR;
+      if (!e.eating && lift === 0) {
         this.ctx.save();
         this.ctx.globalAlpha = 0.35 * alpha;
         line(this.ctx, [{ x: cx + size * 0.45, y: bottom - size * 0.1 }, { x: cx + size * 0.75, y: bottom - size * 0.1 }], mulberry32(e.id + frame), 2);
@@ -416,10 +478,51 @@ export class Renderer {
         this.ctx.restore();
       }
       const bob = e.eating ? Math.sin(a * 14) * 2 : Math.sin(a * 20) * 1.2;
-      this.drawRoller(cx, bottom + bob, size * 0.9, frame, spin, alpha);
+      this.drawRoller(cx, bottom + (lift > 0 ? 0 : bob), size * 0.9, frame, spin, alpha, rot);
     }
-    const barH = e.kind === 'blob' ? 0.72 : e.kind === 'beetle' ? 0.8 : 0.78;
-    if (e.hp < stats.hp) this.hpBar(cx, bottom - size * barH, size * 0.5, e.hp / e.maxHp);
+    const barH = e.kind === 'blob' ? 0.72 : e.kind === 'beetle' ? 0.8 : e.kind === 'pogo' ? 0.96 : e.kind === 'crab' ? 0.7 : 0.78;
+    if (e.hp < e.maxHp) this.hpBar(cx, bottom - size * barH, size * 0.5, e.hp / e.maxHp);
+    this.drawPowerCue(e, g, cx, bottom, size);
+  }
+
+  /** Persistent comic labels so powers read even in a still frame. */
+  private drawPowerCue(e: Enemy, g: Game, cx: number, bottom: number, size: number) {
+    const powers = g.level.powers;
+    if (e.hopT > 0) {
+      this.comicTag(e.kind === 'pogo' ? 'BOING!' : 'HOP!', cx, bottom - size * 1.02, e.kind === 'pogo' ? '#ffc2a1' : '#fde99a', 20);
+      return;
+    }
+    if (e.reviveT > 0) {
+      this.comicTag('AGAIN!', cx, bottom - size * 0.95, '#c8ec9f', 22);
+      return;
+    }
+    if (e.kind === 'blob' && powers.blobRevives && !e.revived) {
+      this.comicTag('1UP', cx + size * 0.28, bottom - size * 0.78, '#9fd46c', 15);
+    }
+    if (e.kind === 'beetle' && powers.beetleGlueImmune && this.standingOnTrap(e, g)) {
+      this.comicTag('NOPE!', cx, bottom - size * 0.95, '#f8d55a', 20);
+    }
+    if (e.kind === 'crab' && !e.eating) {
+      this.comicTag('SHELL', cx, bottom - size * 0.92, '#d5dde6', 16);
+    }
+  }
+
+  private standingOnTrap(e: Enemy, g: Game) {
+    const col = Math.floor(e.x);
+    if (col < 0 || col >= COLS) return false;
+    const t = g.grid[e.row][col];
+    return t?.kind === 'trap' && Math.abs(e.x - (col + 0.5)) < 0.45;
+  }
+
+  private comicTag(text: string, x: number, y: number, fill: string, size: number) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-0.06);
+    const rng = mulberry32(text.length * 97 + Math.round(x + y));
+    shape(ctx, starburstPts(0, 0, size * 1.7, size * 1.15, 11, rng, 0.62), rng, { fill, lw: 2, sketch: false });
+    inkText(ctx, text, 0, 0, { size, fill: '#fffdf7', lw: Math.max(3, size * 0.16) });
+    ctx.restore();
   }
 
   private hpBar(cx: number, y: number, w: number, ratio: number) {
@@ -437,9 +540,10 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawRiftArrows(t: number) {
+  private drawRiftArrows(t: number, theme: Theme) {
     const ctx = this.ctx;
     const L = this.L;
+    const color = theme === 'quarry' ? '#f08a3c' : '#9a6ee6';
     for (let r = 0; r < ROWS; r++) {
       const y = L.lawn.y + (r + 0.5) * L.cellH;
       const wob = Math.sin(t * 3 + r * 1.3) * 5;
@@ -452,7 +556,7 @@ export class Renderer {
         { x: head + 10, y },
       ];
       line(ctx, pts, rng, 9, INK, 1);
-      line(ctx, pts, rng, 4.5, '#9a6ee6', 0.8);
+      line(ctx, pts, rng, 4.5, color, 0.8);
       shape(
         ctx,
         [
@@ -462,7 +566,7 @@ export class Renderer {
           { x: head + 18, y: y + 10 },
         ],
         rng,
-        { fill: '#9a6ee6', lw: 2.6, sketch: false, step: 6 },
+        { fill: color, lw: 2.6, sketch: false, step: 6 },
       );
     }
   }
@@ -547,7 +651,7 @@ export class Renderer {
     const wp = L.wavePill;
     this.pill(wp, 103);
     const shown = Math.min(g.waveIndex + 1, g.totalWaves);
-    inkText(this.ctx, 'WAVE', wp.x + 16, wp.y + wp.h * 0.32, {
+    inkText(this.ctx, `L${g.levelId} WAVE`, wp.x + 16, wp.y + wp.h * 0.32, {
       size: wp.h * 0.3,
       fill: '#fffdf7',
       align: 'left',
@@ -621,8 +725,8 @@ export class Renderer {
     const L = this.L;
     const g = v.game;
     const frame = this.boil(v.time);
-    const colors: Record<TowerKind, string> = { wall: PAL.red, shooter: PAL.blue, trap: PAL.yellow };
-    TOOL_ORDER.forEach((kind, i) => {
+    const colors: Record<TowerKind, string> = { wall: PAL.red, shooter: PAL.blue, trap: PAL.yellow, bastion: '#ef8f62' };
+    g.toolOrder.forEach((kind, i) => {
       const r = L.tools[kind];
       const stats = TOWERS[kind];
       const selected = v.selected === kind;
@@ -714,9 +818,8 @@ export class Renderer {
       return `Tap an empty lawn square to place a ${s.label}. ${s.blurb}.`;
     }
     if (g.phase === 'ready') {
-      return g.towers().length === 0
-        ? 'Pick a tower below, then tap the lawn to snap it down!'
-        : 'Ready? Hit Start when your bricks are in place.';
+      if (g.towers().length === 0) return g.level.intro;
+      return 'Ready? Hit Start when your bricks are in place.';
     }
     if (g.phase === 'intermission') return 'Wave cleared! Spend your bricks before the next wave.';
     return '';
@@ -804,7 +907,9 @@ export class Renderer {
   private drawOverlay(v: ViewState, kind: 'pause' | 'won' | 'lost') {
     const ctx = this.ctx;
     const L = this.L;
-    const { panel, buttons } = overlayLayout(L, kind);
+    const g = v.game;
+    const offerNext = kind === 'won' && g.levelId < 3;
+    const { panel, buttons } = overlayLayout(L, kind, offerNext);
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = 'rgba(42,38,34,0.55)';
@@ -825,7 +930,6 @@ export class Renderer {
 
     const cx = panel.x + panel.w / 2;
     const frame = this.boil(v.time);
-    const g = v.game;
     const title = kind === 'pause' ? 'Paused' : kind === 'won' ? 'Fort Saved!' : 'Oh No!';
     const burstColor = kind === 'won' ? PAL.yellow : kind === 'lost' ? '#f4a19a' : PAL.blueTop;
     shape(ctx, starburstPts(cx, panel.y + 86, 250, 190, 16, mulberry32(801), 0.36), mulberry32(802), {
@@ -837,26 +941,41 @@ export class Renderer {
 
     let sub = '';
     let sub2 = '';
+    const nextId = (g.levelId + 1) as LevelId;
     if (kind === 'pause') {
       sub = 'Take a breather. The critters will wait.';
-      sub2 = `Wave ${Math.min(g.waveIndex + 1, g.totalWaves)} of ${g.totalWaves}  ·  ${g.bricks} bricks`;
+      sub2 = `Level ${g.levelId} · ${g.level.name}  ·  wave ${Math.min(g.waveIndex + 1, g.totalWaves)} of ${g.totalWaves}`;
     } else if (kind === 'won') {
-      sub = `You beat ${GAME_TITLE}! All ${g.totalWaves} waves stopped.`;
-      sub2 = `Lives left: ${g.lives}  ·  Bricks saved: ${g.bricks}`;
+      sub = g.levelId === 3 ? `You beat every level of ${GAME_TITLE}!` : `Level ${g.levelId} clear. ${g.level.name} is safe!`;
+      sub2 =
+        g.levelId < 3
+          ? `Next up: Level ${nextId} · ${LEVELS[nextId].name}. Lives left: ${g.lives}.`
+          : `Lives left: ${g.lives}  ·  Bricks saved: ${g.bricks}`;
     } else {
-      sub = `${GAME_TITLE} wins this time. Three critters got in.`;
-      sub2 = `You reached wave ${Math.min(g.waveIndex + 1, g.totalWaves)} of ${g.totalWaves}. Try a new plan!`;
+      sub = `Level ${g.levelId} got through. Three critters reached the fort.`;
+      sub2 =
+        g.levelId === 1
+          ? `You reached wave ${Math.min(g.waveIndex + 1, g.totalWaves)} of ${g.totalWaves}. Try a new plan!`
+          : g.level.intro;
     }
     inkText(ctx, sub, cx, panel.y + 176, { size: 30, font: 'hand', fill: INK, outline: 'none', maxWidth: panel.w - 60 });
     inkText(ctx, sub2, cx, panel.y + 214, { size: 26, font: 'hand', fill: '#6b655c', outline: 'none', maxWidth: panel.w - 60 });
 
-    const rowY = buttons[0].rect.y - 18;
-    const s = L.portrait ? 130 : 100;
+    const rowY = Math.min(...buttons.map((b) => b.rect.y)) - 12;
+    const s = L.portrait ? 120 : 96;
     const bob = Math.sin(v.time * 4) * 3;
-    if (kind === 'lost') {
+    if (kind === 'lost' && g.levelId === 3) {
+      this.drawSprite('pogoA', cx - 170, rowY + bob, s, frame);
+      this.drawSprite('crabChomp', cx, rowY - bob, s * 1.02, frame);
+      this.drawSprite('bastion0', cx + 170, rowY + bob, s, frame);
+    } else if (kind === 'lost') {
       this.drawSprite('blob', cx - 170, rowY + bob, s * 0.86, frame);
       this.drawSprite('beetleA', cx, rowY - bob, s, frame);
       this.drawRoller(cx + 170, rowY + bob, s * 0.9, frame, v.time * -4);
+    } else if (g.toolOrder.includes('bastion')) {
+      this.drawSprite('bastion0', cx - 170, rowY + bob, s, frame);
+      this.drawSprite('wall0', cx, rowY - bob, s, frame);
+      this.drawSprite('trap', cx + 170, rowY + s * 0.06, s, frame);
     } else {
       this.drawSprite('wall0', cx - 170, rowY + bob, s, frame);
       this.drawSprite('shooter', cx, rowY - bob, s, frame);
@@ -878,12 +997,12 @@ export class Renderer {
     const T = titleLayout(L);
     const frame = this.boil(v.time);
     this.drawBanner(ctx, T.banner, mulberry32(41));
-    inkText(ctx, 'Snap brick towers onto the lawn. Stop the critters before they reach your fort!', T.subtitle.x, T.subtitle.y, {
-      size: L.portrait ? 26 : 28,
+    inkText(ctx, 'Pick a level. Snap towers down. Stop the critters before they reach your fort!', T.subtitle.x, T.subtitle.y, {
+      size: L.portrait ? 24 : 26,
       font: 'hand',
       fill: INK,
       outline: 'none',
-      maxWidth: L.W - 60,
+      maxWidth: L.W - 48,
     });
 
     const cards: { name: SpriteName | 'roller'; title: string; blurb: string; cost?: number }[] = [
@@ -908,11 +1027,11 @@ export class Renderer {
       const bob = Math.sin(v.time * 4 + i) * 3;
       let sx: number, sb: number, size: number, tx: number, ty: number, align: CanvasTextAlign;
       if (L.portrait) {
-        size = 130;
+        size = 108;
         sx = r.x + r.w / 2;
-        sb = r.y + 140;
+        sb = r.y + 112;
         tx = r.x + r.w / 2;
-        ty = r.y + 170;
+        ty = r.y + 132;
         align = 'center';
       } else {
         size = 140;
@@ -952,15 +1071,38 @@ export class Renderer {
       ctx.restore();
     });
 
-    const p = T.play;
-    const pulse = Math.abs(Math.sin(v.time * 3)) * 5;
-    const y = this.button(p, GREEN_BTN, 1100, { lift: pulse + (v.hoverUi === 'play' ? 3 : 0), radius: 26 });
-    inkText(ctx, 'Play ▶', p.x + p.w / 2, y + p.h / 2, { size: 58, fill: '#fffdf7', lw: 9 });
-    inkText(ctx, 'A tiny tower-defense game for Savyr', T.footer.x, T.footer.y, {
+    const levelColors = [GREEN_BTN, PAL.yellow, '#ef8f62'];
+    T.levels.forEach((rect, i) => {
+      const id = `level${i + 1}`;
+      const pulse = i === 0 ? Math.abs(Math.sin(v.time * 3)) * 3 : 0;
+      const y = this.button(rect, levelColors[i], 1100 + i, {
+        lift: pulse + (v.hoverUi === id ? 4 : 0),
+        radius: 22,
+      });
+      const lv = LEVELS[LEVEL_IDS[i]];
+      if (L.portrait) {
+        inkText(ctx, `Level ${lv.id}  ·  ${lv.name}`, rect.x + rect.w / 2, y + rect.h / 2, {
+          size: 36,
+          fill: '#fffdf7',
+          maxWidth: rect.w - 28,
+        });
+      } else {
+        inkText(ctx, `Level ${lv.id}`, rect.x + rect.w / 2, y + rect.h * 0.36, { size: 36, fill: '#fffdf7' });
+        inkText(ctx, lv.name, rect.x + rect.w / 2, y + rect.h * 0.72, {
+          size: 28,
+          font: 'hand',
+          fill: INK,
+          outline: 'none',
+          maxWidth: rect.w - 24,
+        });
+      }
+    });
+    inkText(ctx, 'Keys 1, 2, 3 pick a level  ·  a tiny tower-defense game for Savyr', T.footer.x, T.footer.y, {
       size: 22,
       font: 'hand',
       fill: '#8a8378',
       outline: 'none',
+      maxWidth: L.W - 40,
     });
   }
 }
@@ -997,75 +1139,127 @@ function rock(ctx: CanvasRenderingContext2D, rng: Rng, x: number, y: number, r: 
   hatch(ctx, ellipsePts(x + r * 0.2, y + r * 0.3, r * 0.8, r * 0.4, 10), rng, INK, 3.5, 1, 0.3);
 }
 
-function drawLawn(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
+function drawLawn(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng, theme: Theme) {
+  const quarry = theme === 'quarry';
   const { x, y, w, h } = L.lawn;
-  shape(ctx, rectPts(x - 8, y - 8, w + 16, h + 16, 12), rng, { fill: '#79b84d', lw: 3, amp: 3 });
+  const tileA = quarry ? '#e7b48a' : LAWN_A;
+  const tileB = quarry ? '#d39a6e' : LAWN_B;
+  const edge = quarry ? '#a56a42' : '#79b84d';
+  const gridInk = quarry ? '#8a5434' : '#4f8a32';
+  shape(ctx, rectPts(x - 8, y - 8, w + 16, h + 16, 12), rng, { fill: edge, lw: 3, amp: 3 });
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const cx = x + c * L.cellW;
       const cy = y + r * L.cellH;
-      ctx.fillStyle = (r + c) % 2 === 0 ? LAWN_A : LAWN_B;
+      ctx.fillStyle = (r + c) % 2 === 0 ? tileA : tileB;
       ctx.fillRect(cx, cy, L.cellW, L.cellH);
       ctx.lineCap = 'round';
-      const blades = Math.floor((L.cellW * L.cellH) / 170);
-      for (let i = 0; i < blades; i++) {
-        const bx = cx + 4 + rng() * (L.cellW - 8);
-        const by = cy + 6 + rng() * (L.cellH - 8);
-        const dark = rng() > 0.4;
-        ctx.strokeStyle = dark ? 'rgba(78,138,48,0.55)' : 'rgba(200,236,160,0.6)';
-        ctx.lineWidth = dark ? 1.4 : 1.2;
-        ctx.beginPath();
-        ctx.moveTo(bx, by);
-        ctx.lineTo(bx + (rng() - 0.5) * 3, by - 3 - rng() * 5);
-        ctx.stroke();
+      if (quarry) {
+        const specks = Math.floor((L.cellW * L.cellH) / 420);
+        for (let i = 0; i < specks; i++) {
+          const bx = cx + 6 + rng() * (L.cellW - 12);
+          const by = cy + 6 + rng() * (L.cellH - 12);
+          ctx.fillStyle = rng() > 0.5 ? 'rgba(120,72,40,0.45)' : 'rgba(255,236,210,0.55)';
+          ctx.beginPath();
+          ctx.arc(bx, by, 1.1 + rng() * 1.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        if (rng() > 0.82) {
+          const px = cx + 8 + rng() * (L.cellW - 16);
+          const py = cy + 8 + rng() * (L.cellH - 16);
+          line(
+            ctx,
+            [
+              { x: px, y: py },
+              { x: px + 10 + rng() * 14, y: py + (rng() - 0.5) * 8 },
+            ],
+            rng,
+            2,
+            'rgba(255,170,60,0.9)',
+            0.6,
+          );
+        }
+      } else {
+        const blades = Math.floor((L.cellW * L.cellH) / 170);
+        for (let i = 0; i < blades; i++) {
+          const bx = cx + 4 + rng() * (L.cellW - 8);
+          const by = cy + 6 + rng() * (L.cellH - 8);
+          const dark = rng() > 0.4;
+          ctx.strokeStyle = dark ? 'rgba(78,138,48,0.55)' : 'rgba(200,236,160,0.6)';
+          ctx.lineWidth = dark ? 1.4 : 1.2;
+          ctx.beginPath();
+          ctx.moveTo(bx, by);
+          ctx.lineTo(bx + (rng() - 0.5) * 3, by - 3 - rng() * 5);
+          ctx.stroke();
+        }
       }
       if (rng() > 0.8) {
         const px = cx + 10 + rng() * (L.cellW - 20);
         const py = cy + 10 + rng() * (L.cellH - 20);
-        shape(ctx, ellipsePts(px, py, 3.2, 2.4, 8), rng, { fill: '#c9c4b8', lw: 1.4, sketch: false, amp: 0.4 });
+        shape(ctx, ellipsePts(px, py, quarry ? 4 : 3.2, quarry ? 3 : 2.4, 8), rng, {
+          fill: quarry ? (rng() > 0.6 ? '#7ec8c3' : '#c4b4a4') : '#c9c4b8',
+          lw: 1.4,
+          sketch: false,
+          amp: 0.4,
+        });
       }
     }
   }
   ctx.save();
   ctx.globalAlpha = 0.55;
   for (let c = 1; c < COLS; c++) {
-    line(ctx, [{ x: x + c * L.cellW, y: y + 2 }, { x: x + c * L.cellW, y: y + h - 2 }], rng, 1.6, '#4f8a32', 1.4);
+    line(ctx, [{ x: x + c * L.cellW, y: y + 2 }, { x: x + c * L.cellW, y: y + h - 2 }], rng, 1.6, gridInk, 1.4);
   }
   for (let r = 1; r < ROWS; r++) {
-    line(ctx, [{ x: x + 2, y: y + r * L.cellH }, { x: x + w - 2, y: y + r * L.cellH }], rng, 1.6, '#4f8a32', 1.4);
+    line(ctx, [{ x: x + 2, y: y + r * L.cellH }, { x: x + w - 2, y: y + r * L.cellH }], rng, 1.6, gridInk, 1.4);
   }
   ctx.restore();
   shape(ctx, rectPts(x, y, w, h, 4), rng, { lw: 4.2, amp: 2 });
-  for (let tx = x + 10; tx < x + w - 10; tx += 22 + rng() * 18) {
-    for (const [edge, dir] of [
-      [y, -1],
-      [y + h, 1],
-    ]) {
-      const bx = tx + (rng() - 0.5) * 8;
-      line(
-        ctx,
-        [
-          { x: bx - 5, y: edge + dir * 2 },
-          { x: bx - 2, y: edge + dir * 9 },
-          { x: bx, y: edge + dir * 3 },
-          { x: bx + 3, y: edge + dir * 11 },
-          { x: bx + 5, y: edge + dir * 2 },
-        ],
-        rng,
-        1.6,
-        '#3f7a28',
-        0.6,
-      );
+  if (!quarry) {
+    for (let tx = x + 10; tx < x + w - 10; tx += 22 + rng() * 18) {
+      for (const [edgeY, dir] of [
+        [y, -1],
+        [y + h, 1],
+      ] as const) {
+        const bx = tx + (rng() - 0.5) * 8;
+        line(
+          ctx,
+          [
+            { x: bx - 5, y: edgeY + dir * 2 },
+            { x: bx - 2, y: edgeY + dir * 9 },
+            { x: bx, y: edgeY + dir * 3 },
+            { x: bx + 3, y: edgeY + dir * 11 },
+            { x: bx + 5, y: edgeY + dir * 2 },
+          ],
+          rng,
+          1.6,
+          '#3f7a28',
+          0.6,
+        );
+      }
+    }
+  } else {
+    for (let i = 0; i < 18; i++) {
+      rock(ctx, rng, x + 8 + rng() * (w - 16), y - 6 + rng() * 10, 5 + rng() * 4);
+      rock(ctx, rng, x + 8 + rng() * (w - 16), y + h - 2 + rng() * 8, 5 + rng() * 4);
     }
   }
 }
 
-function drawFortress(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
+function drawFortress(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng, theme: Theme) {
   const f = L.fortress;
   if (f.w / f.h < 0.3) {
-    drawRampart(ctx, L, rng);
+    drawRampart(ctx, L, rng, theme);
     return;
   }
+  const quarry = theme === 'quarry';
+  const dirtFill = quarry ? '#c4a27a' : '#dcc08f';
+  const bodyFill = quarry ? PAL.slate : PAL.red;
+  const capFill = quarry ? PAL.slateDark : '#bdb9b1';
+  const merlonFill = quarry ? PAL.slateHi : '#c9c5bd';
+  const flagFill = quarry ? PAL.orange : '#5d91e2';
+  const woodFill = quarry ? '#8d6a45' : '#c49a5c';
+  const plankFill = quarry ? '#b08960' : '#d4ad70';
   const s = Math.min(f.w / 236, f.h / 470);
   ctx.save();
   ctx.translate(f.x, f.y + (f.h - 470 * s) / 2);
@@ -1081,7 +1275,7 @@ function drawFortress(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
     { x: 150, y: 420 },
     { x: 156, y: 360 },
   ];
-  shape(ctx, dirt, rng, { fill: '#dcc08f', lw: 2.4, amp: 3, sketch: false });
+  shape(ctx, dirt, rng, { fill: dirtFill, lw: 2.4, amp: 3, sketch: false });
   ctx.save();
   ctx.beginPath();
   dirt.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
@@ -1100,7 +1294,7 @@ function drawFortress(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
   for (let yy = 30; yy < 450; yy += 34 + rng() * 20) rock(ctx, rng, 226 + rng() * 10, yy, 7 + rng() * 5);
 
   const body = rectPts(20, 176, 146, 166);
-  shape(ctx, body, rng, { fill: PAL.red, lw: 4 });
+  shape(ctx, body, rng, { fill: bodyFill, lw: 4 });
   ctx.save();
   ctx.globalAlpha = 0.7;
   const rows = 8;
@@ -1114,9 +1308,9 @@ function drawFortress(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
   ctx.restore();
   hatch(ctx, rectPts(130, 176, 36, 166), rng, INK, 5, 1.2, 0.3);
 
-  shape(ctx, rectPts(10, 148, 166, 32), rng, { fill: '#bdb9b1', lw: 3.6 });
+  shape(ctx, rectPts(10, 148, 166, 32), rng, { fill: capFill, lw: 3.6 });
   for (let i = 0; i < 4; i++) {
-    shape(ctx, rectPts(10 + i * 46, 118, 28, 32), rng, { fill: '#c9c5bd', lw: 3.4 });
+    shape(ctx, rectPts(10 + i * 46, 118, 28, 32), rng, { fill: merlonFill, lw: 3.4 });
     hatch(ctx, rectPts(28 + i * 46, 118, 10, 32), rng, INK, 4, 1, 0.3);
   }
   line(ctx, [{ x: 40, y: 164 }, { x: 40, y: 180 }], rng, 1.6);
@@ -1148,7 +1342,7 @@ function drawFortress(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
     { x: 126, y: 60 },
     { x: 94, y: 70 },
   ];
-  shape(ctx, flag, rng, { fill: '#5d91e2', lw: 3.4, step: 8 });
+  shape(ctx, flag, rng, { fill: flagFill, lw: 3.4, step: 8 });
   const star: Pt[] = [];
   for (let i = 0; i < 10; i++) {
     const a = -Math.PI / 2 + (i / 10) * Math.PI * 2;
@@ -1161,18 +1355,19 @@ function drawFortress(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
     [58, 392],
     [104, 404],
   ]) {
-    shape(ctx, rectPts(px, py, 13, 44, 3), rng, { fill: '#c49a5c', lw: 2.6 });
+    shape(ctx, rectPts(px, py, 13, 44, 3), rng, { fill: woodFill, lw: 2.6 });
   }
-  shape(ctx, rectPts(50, 408, 76, 9, 2), rng, { fill: '#d4ad70', lw: 2.4 });
+  shape(ctx, rectPts(50, 408, 76, 9, 2), rng, { fill: plankFill, lw: 2.4 });
   ctx.restore();
 }
 
-function drawRampart(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
+function drawRampart(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng, theme: Theme) {
   const f = L.fortress;
+  const quarry = theme === 'quarry';
   const top = L.lawn.y - 10;
   const bottom = L.lawn.y + L.lawn.h + 10;
   const w = f.w * 0.62;
-  shape(ctx, rectPts(f.x - 6, top, w + 6, bottom - top), rng, { fill: PAL.red, lw: 3.4 });
+  shape(ctx, rectPts(f.x - 6, top, w + 6, bottom - top), rng, { fill: quarry ? PAL.slate : PAL.red, lw: 3.4 });
   ctx.save();
   ctx.globalAlpha = 0.7;
   for (let yy = top + 16, r = 0; yy < bottom; yy += 16, r++) {
@@ -1182,7 +1377,7 @@ function drawRampart(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
   }
   ctx.restore();
   for (let yy = top + 8; yy < bottom - 20; yy += 44) {
-    shape(ctx, rectPts(f.x + w - 2, yy, f.w - w - 2, 24), rng, { fill: '#c9c5bd', lw: 2.6, sketch: false });
+    shape(ctx, rectPts(f.x + w - 2, yy, f.w - w - 2, 24), rng, { fill: quarry ? PAL.slateHi : '#c9c5bd', lw: 2.6, sketch: false });
   }
   line(ctx, [{ x: f.x + w * 0.5, y: top }, { x: f.x + w * 0.5, y: top - 34 }], rng, 3.4);
   shape(
@@ -1193,13 +1388,20 @@ function drawRampart(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
       { x: f.x + w * 0.5 + 1, y: top - 18 },
     ],
     rng,
-    { fill: '#5d91e2', lw: 2.4, sketch: false, step: 6 },
+    { fill: quarry ? PAL.orange : '#5d91e2', lw: 2.4, sketch: false, step: 6 },
   );
   for (let i = 0; i < 4; i++) rock(ctx, rng, f.x + 8 + rng() * (f.w - 12), bottom + 4 + rng() * 10, 7 + rng() * 4);
 }
 
-function drawRift(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
+function drawRift(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng, theme: Theme) {
+  const quarry = theme === 'quarry';
   const { x, y, w, h } = L.rift;
+  const edgeFill = quarry ? '#ffe1b0' : '#fffdf7';
+  const deep = quarry ? '#6a2414' : '#3e2a69';
+  const hatchInk = quarry ? '#2a0c08' : '#120b22';
+  const streakA = quarry ? 'rgba(255,170,70,0.85)' : 'rgba(122,88,196,0.8)';
+  const streakB = quarry ? 'rgba(255,120,40,0.55)' : 'rgba(160,126,228,0.55)';
+  const pebble = quarry ? '#5c4034' : '#8f8b98';
   const build = (inset: number, tipX: number, valleyX: number, spikes: number): Pt[] => {
     const pts: Pt[] = [];
     const topY = y + inset;
@@ -1225,9 +1427,9 @@ function drawRift(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
   const spikes = Math.round(h / 44);
   const inset = Math.min(16, w * 0.3);
   const outer = build(0, L.portrait ? -4 : 2, w * 0.3, spikes);
-  shape(ctx, outer, rng, { fill: '#fffdf7', lw: 4, step: 30, amp: 1 });
+  shape(ctx, outer, rng, { fill: edgeFill, lw: 4, step: 30, amp: 1 });
   const inner = build(inset, L.portrait ? 8 : 20, w * 0.44, spikes + 1);
-  shape(ctx, inner, rng, { fill: '#3e2a69', lw: 3.4, step: 30, amp: 1 });
+  shape(ctx, inner, rng, { fill: deep, lw: 3.4, step: 30, amp: 1 });
   ctx.save();
   ctx.beginPath();
   inner.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
@@ -1239,7 +1441,7 @@ function drawRift(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
     const sy = y + rng() * h;
     const len = 8 + rng() * 26;
     const a = -1.1 + (rng() - 0.5) * 0.8;
-    ctx.strokeStyle = rng() > 0.5 ? 'rgba(122,88,196,0.8)' : 'rgba(160,126,228,0.55)';
+    ctx.strokeStyle = rng() > 0.5 ? streakA : streakB;
     ctx.lineWidth = 1.5 + rng() * 2.5;
     ctx.beginPath();
     ctx.moveTo(sx, sy);
@@ -1250,8 +1452,8 @@ function drawRift(ctx: CanvasRenderingContext2D, L: Layout, rng: Rng) {
     const rx = x + rng() * w;
     const ry = y + rng() * h;
     const r = 2.5 + rng() * 5;
-    shape(ctx, ellipsePts(rx, ry, r, r * 0.8, 6, rng, 0.5), rng, { fill: '#8f8b98', lw: 1.6, sketch: false, amp: 0.6 });
+    shape(ctx, ellipsePts(rx, ry, r, r * 0.8, 6, rng, 0.5), rng, { fill: pebble, lw: 1.6, sketch: false, amp: 0.6 });
   }
   ctx.restore();
-  hatch(ctx, inner, rng, '#120b22', 5, 1.2, 0.35);
+  hatch(ctx, inner, rng, hatchInk, 5, 1.2, 0.35);
 }
