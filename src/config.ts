@@ -43,8 +43,18 @@ export const TOWERS: Record<TowerKind, TowerStats> = {
   wall: { label: 'Wall', cost: 40, hp: 420, blurb: 'Blocks the path' },
   shooter: { label: 'Shooter', cost: 50, hp: 120, blurb: 'Fires studs down its lane' },
   trap: { label: 'Trap', cost: 30, hp: Infinity, blurb: 'Sticky glue slows critters' },
-  bastion: { label: 'Bastion', cost: 70, hp: 340, blurb: 'A wall that also shoots' },
+  /**
+   * Not sold on the toolbar. A Bastion is a Wall merged with a Shooter.
+   * `cost` is the from-scratch total (40 + 50). The merge itself charges only
+   * the piece you drop: 50 for a Shooter onto a Wall, or 40 for a Wall onto a Shooter.
+   */
+  bastion: { label: 'Bastion', cost: 90, hp: 340, blurb: 'Blocks and shoots' },
 };
+
+/** True when dropping `placed` onto `existing` should become a Bastion. */
+export function isBastionMerge(placed: TowerKind, existing: TowerKind): boolean {
+  return (placed === 'shooter' && existing === 'wall') || (placed === 'wall' && existing === 'shooter');
+}
 
 /** Level 1 toolbar. Higher levels pick their own set. */
 export const TOOL_ORDER: TowerKind[] = ['wall', 'shooter', 'trap'];
@@ -112,15 +122,35 @@ export const WAVES_L2: WaveDef[] = [
   { blob: 12, roller: 11, beetle: 8, gap: 1.35 },
 ];
 
-/** Longer than level 2, with the new critters mixed into the old powers. */
+/**
+ * Longer than level 2. Bastions are merged (90 bricks from scratch, was a 70-brick
+ * button), so the opener stash covers three of them and the late waves are a touch
+ * looser than the button-Bastion version.
+ */
 export const WAVES_L3: WaveDef[] = [
-  { blob: 7, pogo: 1, gap: 3.6 },
-  { blob: 5, pogo: 4, beetle: 1, gap: 2.9 },
-  { blob: 4, pogo: 5, beetle: 2, crab: 1, gap: 2.45 },
-  { pogo: 6, roller: 3, beetle: 2, crab: 2, gap: 2.1 },
-  { blob: 4, pogo: 8, roller: 4, beetle: 4, crab: 3, gap: 1.65 },
-  { blob: 6, pogo: 9, roller: 5, beetle: 4, crab: 4, gap: 1.38 },
+  { blob: 6, pogo: 1, gap: 3.8 },
+  { blob: 6, pogo: 3, beetle: 1, gap: 3.05 },
+  { blob: 5, pogo: 4, beetle: 2, crab: 1, gap: 2.55 },
+  { pogo: 5, roller: 3, beetle: 2, crab: 2, gap: 2.2 },
+  { blob: 4, pogo: 6, roller: 4, beetle: 3, crab: 2, gap: 1.8 },
+  { blob: 5, pogo: 7, roller: 4, beetle: 4, crab: 3, gap: 1.5 },
 ];
+
+/** Endless opener. Three merged Bastions (270) plus a few bricks, same shape as Level 3. */
+export const ENDLESS_START_BRICKS = 280;
+
+/** Escalating quarry waves. Counts and the gap clamp so a late wave stays readable. */
+export function endlessWave(index: number): WaveDef {
+  const n = Math.max(0, index);
+  return {
+    blob: Math.min(16, 5 + n),
+    pogo: Math.min(12, 1 + Math.floor(n * 0.6)),
+    roller: n >= 1 ? Math.min(10, Math.floor(n * 0.7)) : 0,
+    beetle: n >= 2 ? Math.min(8, Math.floor((n - 1) * 0.5)) : 0,
+    crab: n >= 3 ? Math.min(7, Math.floor((n - 2) * 0.4)) : 0,
+    gap: Math.max(1.05, 3.7 - n * 0.16),
+  };
+}
 
 /** Per-level tweaks layered on the base critter stats. Level 1 leaves this empty. */
 export type EnemyMod = Partial<Pick<EnemyStats, 'hp' | 'speed' | 'armor' | 'dps'>>;
@@ -192,13 +222,13 @@ export const LEVELS: Record<LevelId, LevelDef> = {
   3: {
     id: 3,
     name: 'Quarry Dusk',
-    tagline: 'New map, bastion towers',
-    intro: 'Bastions block and shoot. Pogos spring, crabs chomp!',
+    tagline: 'Merge a Wall and a Shooter',
+    intro: 'Pogos spring, crabs chomp, and beetles ignore glue.',
     theme: 'quarry',
-    tools: ['wall', 'bastion', 'trap'],
+    tools: ['wall', 'shooter', 'trap'],
     waves: WAVES_L3,
-    // Three bastions, matching Level 1's opening of three shooters.
-    startBricks: 220,
+    // Three merged Bastions (3 × 90). Same opener shape as the old three 70-brick Bastions.
+    startBricks: 270,
     rowStreak: 4,
     hotWaves: 3,
     enemyMods: {

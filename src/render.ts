@@ -1,4 +1,16 @@
-import { COLS, ENEMIES, GAME_TITLE, LEVELS, LEVEL_IDS, ROWS, TOWERS, type LevelId, type Theme, type TowerKind } from './config';
+import {
+  COLS,
+  ENEMIES,
+  GAME_TITLE,
+  LEVELS,
+  LEVEL_IDS,
+  ROWS,
+  TOWERS,
+  isBastionMerge,
+  type LevelId,
+  type Theme,
+  type TowerKind,
+} from './config';
 import {
   ellipsePts,
   hatch,
@@ -15,6 +27,7 @@ import {
   type Rng,
 } from './ink';
 import { pickLayout, type Layout, type Rect } from './layout';
+import { formatScore, type Records, type RunOutcome } from './score';
 import type { Enemy, Game, Tower } from './sim';
 import { BOIL_FRAMES, clearSpriteCache, PAL, sprite, type SpriteName } from './sprites';
 
@@ -47,6 +60,10 @@ export interface ViewState {
   time: number;
   /** When set, the scene draws but the sim does not advance (screenshot tableaus). */
   hold: boolean;
+  records: Records;
+  outcome: RunOutcome | null;
+  /** Holds comic words on screen for screenshot frames. */
+  freezeFx: boolean;
 }
 
 export interface UiButton {
@@ -65,50 +82,60 @@ export function titleLayout(L: Layout) {
   if (L.portrait) {
     const oy = (L.H - 1180) / 2;
     const pw = 330;
-    const ph = 196;
+    const ph = 168;
     const panels: Rect[] = [];
     for (let i = 0; i < 6; i++) {
       const col = i < 3 ? 0 : 1;
       const row = i % 3;
-      panels.push({ x: 20 + col * (pw + 20), y: oy + 164 + row * (ph + 8), w: pw, h: ph });
+      panels.push({ x: 20 + col * (pw + 20), y: oy + 156 + row * (ph + 6), w: pw, h: ph });
     }
-    const levels: Rect[] = LEVEL_IDS.map((_, i) => ({ x: 48, y: oy + 792 + i * 92, w: 624, h: 82 }));
+    const levels: Rect[] = LEVEL_IDS.map((_, i) => ({ x: 48, y: oy + 690 + i * 84, w: 624, h: 76 }));
     return {
-      banner: { x: 40, y: oy + 20, w: 640, h: 104 },
-      subtitle: { x: 360, y: oy + 142 },
+      banner: { x: 40, y: oy + 16, w: 640, h: 100 },
+      subtitle: { x: 360, y: oy + 136 },
       panels,
       levels,
-      footer: { x: 360, y: oy + 1108 },
+      endless: { x: 48, y: oy + 950, w: 624, h: 80 },
+      footer: { x: 360, y: oy + 1072 },
     };
   }
   const pw = 384;
-  const ph = 164;
+  const ph = 142;
   const panels: Rect[] = [];
   for (let i = 0; i < 6; i++) {
     const col = i % 3;
     const row = Math.floor(i / 3);
-    panels.push({ x: 40 + col * (pw + 24), y: 136 + row * (ph + 10), w: pw, h: ph });
+    panels.push({ x: 40 + col * (pw + 24), y: 132 + row * (ph + 8), w: pw, h: ph });
   }
   const gap = 18;
   const lw = (1280 - 80 - gap * 2) / 3;
-  const levels: Rect[] = LEVEL_IDS.map((_, i) => ({ x: 40 + i * (lw + gap), y: 496, w: lw, h: 108 }));
+  const levels: Rect[] = LEVEL_IDS.map((_, i) => ({ x: 40 + i * (lw + gap), y: 440, w: lw, h: 92 }));
   return {
-    banner: { x: 290, y: 8, w: 700, h: 100 },
-    subtitle: { x: 640, y: 122 },
+    banner: { x: 290, y: 6, w: 700, h: 96 },
+    subtitle: { x: 640, y: 116 },
     panels,
     levels,
-    footer: { x: 640, y: 688 },
+    endless: { x: 390, y: 546, w: 500, h: 78 },
+    footer: { x: 640, y: 676 },
   };
 }
 
-export function overlayLayout(L: Layout, kind: 'pause' | 'won' | 'lost', offerNext = false) {
-  const pw = 660;
-  const extra = kind === 'won' && offerNext ? 110 : 0;
-  const ph = (L.portrait ? 560 : 480) + extra;
-  const panel: Rect = { x: (L.W - pw) / 2, y: (L.H - ph) / 2, w: pw, h: ph };
-  const bw = 250;
-  const bh = 90;
-  const by = panel.y + ph - bh - 28;
+export type OverlayExtra = 'next' | 'endless' | null;
+
+export function overlayExtra(g: { endless: boolean; phase: string; levelId: number }): OverlayExtra {
+  if (g.endless || g.phase !== 'won') return null;
+  return g.levelId < 3 ? 'next' : 'endless';
+}
+
+export function overlayLayout(L: Layout, kind: 'pause' | 'won' | 'lost', extra: OverlayExtra = null) {
+  const pw = Math.min(700, L.W - 40);
+  let ph = kind === 'pause' ? (L.portrait ? 520 : 460) : L.portrait ? 720 : 640;
+  if (extra) ph += L.portrait ? 108 : 100;
+  if (ph > L.H - 24) ph = L.H - 24;
+  const panel: Rect = { x: (L.W - pw) / 2, y: Math.max(12, (L.H - ph) / 2), w: pw, h: ph };
+  const bw = Math.min(250, (pw - 72) / 2);
+  const bh = L.portrait ? 84 : 78;
+  const by = panel.y + ph - bh - 22;
   const left: Rect = { x: panel.x + pw / 2 - bw - 12, y: by, w: bw, h: bh };
   const right: Rect = { x: panel.x + pw / 2 + 12, y: by, w: bw, h: bh };
   let buttons: UiButton[];
@@ -117,9 +144,14 @@ export function overlayLayout(L: Layout, kind: 'pause' | 'won' | 'lost', offerNe
       { id: 'resume', label: 'Resume', color: GREEN_BTN, rect: left },
       { id: 'restart', label: 'Restart', color: PAL.red, rect: right },
     ];
-  } else if (kind === 'won' && offerNext) {
+  } else if (extra) {
     buttons = [
-      { id: 'next', label: 'Next Level', color: GREEN_BTN, rect: { x: panel.x + 48, y: by - bh - 14, w: pw - 96, h: bh } },
+      {
+        id: extra,
+        label: extra === 'next' ? 'Next Level' : 'Endless',
+        color: extra === 'next' ? GREEN_BTN : PAL.purple,
+        rect: { x: panel.x + 48, y: by - bh - 12, w: pw - 96, h: bh },
+      },
       { id: 'restart', label: 'Replay', color: PAL.blue, rect: left },
       { id: 'menu', label: 'Levels', color: PAL.yellow, rect: right },
     ];
@@ -302,11 +334,14 @@ export class Renderer {
       ctx.save();
       ctx.setLineDash([7, 7]);
       ctx.lineDashOffset = -t * 20;
-      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
       ctx.lineWidth = 2.5;
       for (let r = 0; r < ROWS; r++)
         for (let c = 0; c < COLS; c++) {
-          if (g.grid[r][c]) continue;
+          const tile = g.grid[r][c];
+          const merge = !!tile && isBastionMerge(v.selected, tile.kind);
+          if (tile && !merge) continue;
+          ctx.strokeStyle = merge ? 'rgba(248,213,90,0.95)' : 'rgba(255,255,255,0.55)';
+          ctx.lineWidth = merge ? 3.4 : 2.5;
           ctx.strokeRect(L.lawn.x + c * L.cellW + 7, L.lawn.y + r * L.cellH + 7, L.cellW - 14, L.cellH - 14);
         }
       ctx.restore();
@@ -321,8 +356,8 @@ export class Renderer {
       ctx.fillStyle = check === 'ok' ? 'rgba(255,255,255,0.35)' : 'rgba(236,90,80,0.35)';
       ctx.fillRect(x + 3, y + 3, L.cellW - 6, L.cellH - 6);
       ctx.restore();
-      if (check === 'ok') {
-        this.drawTowerSprite(v.selected, x + L.cellW / 2, this.cellBottom(row), this.unitSize(), frame, 0, 0.55);
+      if (check === 'ok' && !g.grid[row][col]) {
+        this.drawTowerSprite(v.selected, x + L.cellW / 2, this.cellBottom(row), this.unitSize(), frame, 1, 0.55);
       }
     }
 
@@ -349,6 +384,14 @@ export class Renderer {
       line(ctx, [{ x: sx - d * 2.2, y: sy }, { x: sx - d * 0.8, y: sy }], mulberry32(s.id), 2, INK, 0.5);
       ctx.restore();
       ctx.drawImage(sprite('stud', this.px(d), 0), sx - d / 2, sy - d / 2, d, d);
+    }
+
+    if (v.hover && v.selected && !v.paused) {
+      const tile = g.grid[v.hover.row][v.hover.col];
+      if (tile && isBastionMerge(v.selected, tile.kind) && g.canPlace(v.selected, v.hover.row, v.hover.col) === 'ok') {
+        const cx = L.lawn.x + (v.hover.col + 0.5) * L.cellW;
+        this.drawTowerSprite('bastion', cx, this.cellBottom(v.hover.row), size, frame, 1, 0.82);
+      }
     }
 
     this.drawEffects(v, false);
@@ -650,15 +693,15 @@ export class Renderer {
 
     const wp = L.wavePill;
     this.pill(wp, 103);
-    const shown = Math.min(g.waveIndex + 1, g.totalWaves);
-    inkText(this.ctx, `L${g.levelId} WAVE`, wp.x + 16, wp.y + wp.h * 0.32, {
+    const shown = g.waveIndex + 1;
+    inkText(this.ctx, g.endless ? 'ENDLESS' : `L${g.levelId} WAVE`, wp.x + 16, wp.y + wp.h * 0.32, {
       size: wp.h * 0.3,
       fill: '#fffdf7',
       align: 'left',
       shadow: false,
       outline: 'none',
     });
-    inkText(this.ctx, `${shown} OF ${g.totalWaves}`, wp.x + 16, wp.y + wp.h * 0.68, {
+    inkText(this.ctx, g.endless ? `WAVE ${shown}` : `${shown} OF ${g.totalWaves}`, wp.x + 16, wp.y + wp.h * 0.68, {
       size: wp.h * 0.34,
       fill: '#fffdf7',
       align: 'left',
@@ -812,10 +855,27 @@ export class Renderer {
   private hintText(v: ViewState): string {
     const g = v.game;
     if (g.phase === 'won' || g.phase === 'lost') return '';
+    const teachMerge = g.endless || g.levelId === 3;
+    if (v.selected && v.hover) {
+      const tile = g.grid[v.hover.row]?.[v.hover.col];
+      if (tile && isBastionMerge(v.selected, tile.kind)) {
+        const cost = TOWERS[v.selected].cost;
+        if (g.bricks < cost) return `That Bastion merge costs ${cost}. You have ${g.bricks} bricks.`;
+        return `Merges into a Bastion. You pay ${cost} for this ${TOWERS[v.selected].label}.`;
+      }
+    }
     if (v.selected) {
       const s = TOWERS[v.selected];
       if (g.bricks < s.cost) return `${s.label} costs ${s.cost} bricks. Beat critters to earn more!`;
-      return `Tap an empty lawn square to place a ${s.label}. ${s.blurb}.`;
+      if (teachMerge && (v.selected === 'wall' || v.selected === 'shooter')) {
+        const other = v.selected === 'wall' ? 'Shooter' : 'Wall';
+        return `Place a ${s.label} for ${s.cost}, or drop it on a ${other} to merge.`;
+      }
+      return `Tap an empty square to place a ${s.label}. ${s.blurb}.`;
+    }
+    if (g.phase === 'ready' && g.endless) return 'Endless Quarry. Merge a Shooter onto a Wall — pay only that piece.';
+    if (g.phase === 'ready' && g.levelId === 3) {
+      return 'Shooter on a Wall, or Wall on a Shooter, makes a Bastion. Pay only that piece.';
     }
     if (g.phase === 'ready') {
       if (g.towers().length === 0) return g.level.intro;
@@ -902,14 +962,28 @@ export class Renderer {
     }
   }
 
+  private drawStars(cx: number, y: number, filled: number, total: number) {
+    const size = 34;
+    const gap = 48;
+    const start = cx - ((total - 1) * gap) / 2;
+    for (let i = 0; i < total; i++) {
+      const on = i < filled;
+      shape(this.ctx, starburstPts(start + i * gap, y, size * 0.55, size * 0.24, 5, mulberry32(920 + i)), mulberry32(930 + i), {
+        fill: on ? PAL.yellow : '#e6dfd2',
+        stroke: INK,
+        lw: 3,
+        sketch: false,
+      });
+    }
+  }
+
   // ---------- overlays ----------
 
   private drawOverlay(v: ViewState, kind: 'pause' | 'won' | 'lost') {
     const ctx = this.ctx;
     const L = this.L;
     const g = v.game;
-    const offerNext = kind === 'won' && g.levelId < 3;
-    const { panel, buttons } = overlayLayout(L, kind, offerNext);
+    const { panel, buttons } = overlayLayout(L, kind, overlayExtra(g));
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = 'rgba(42,38,34,0.55)';
@@ -932,25 +1006,31 @@ export class Renderer {
     const frame = this.boil(v.time);
     const title = kind === 'pause' ? 'Paused' : kind === 'won' ? 'Fort Saved!' : 'Oh No!';
     const burstColor = kind === 'won' ? PAL.yellow : kind === 'lost' ? '#f4a19a' : PAL.blueTop;
-    shape(ctx, starburstPts(cx, panel.y + 86, 250, 190, 16, mulberry32(801), 0.36), mulberry32(802), {
+    shape(ctx, starburstPts(cx, panel.y + 78, 240, 150, 16, mulberry32(801), 0.36), mulberry32(802), {
       fill: burstColor,
       lw: 3,
       sketch: false,
     });
-    inkText(ctx, title, cx, panel.y + 88, { size: 70, fill: '#fffdf7', lw: 10 });
+    inkText(ctx, title, cx, panel.y + 80, { size: 64, fill: '#fffdf7', lw: 10 });
 
     let sub = '';
     let sub2 = '';
     const nextId = (g.levelId + 1) as LevelId;
+    const outcome = v.outcome;
     if (kind === 'pause') {
       sub = 'Take a breather. The critters will wait.';
-      sub2 = `Level ${g.levelId} · ${g.level.name}  ·  wave ${Math.min(g.waveIndex + 1, g.totalWaves)} of ${g.totalWaves}`;
+      sub2 = g.endless
+        ? `Endless Quarry · wave ${g.waveIndex + 1}`
+        : `Level ${g.levelId} · ${g.level.name}  ·  wave ${Math.min(g.waveIndex + 1, g.totalWaves)} of ${g.totalWaves}`;
     } else if (kind === 'won') {
       sub = g.levelId === 3 ? `You beat every level of ${GAME_TITLE}!` : `Level ${g.levelId} clear. ${g.level.name} is safe!`;
       sub2 =
         g.levelId < 3
-          ? `Next up: Level ${nextId} · ${LEVELS[nextId].name}. Lives left: ${g.lives}.`
+          ? `Next up: Level ${nextId} · ${LEVELS[nextId].name}.`
           : `Lives left: ${g.lives}  ·  Bricks saved: ${g.bricks}`;
+    } else if (g.endless) {
+      sub = 'The quarry kept coming.';
+      sub2 = `You reached wave ${g.waveIndex + 1}.`;
     } else {
       sub = `Level ${g.levelId} got through. Three critters reached the fort.`;
       sub2 =
@@ -958,28 +1038,55 @@ export class Renderer {
           ? `You reached wave ${Math.min(g.waveIndex + 1, g.totalWaves)} of ${g.totalWaves}. Try a new plan!`
           : g.level.intro;
     }
-    inkText(ctx, sub, cx, panel.y + 176, { size: 30, font: 'hand', fill: INK, outline: 'none', maxWidth: panel.w - 60 });
-    inkText(ctx, sub2, cx, panel.y + 214, { size: 26, font: 'hand', fill: '#6b655c', outline: 'none', maxWidth: panel.w - 60 });
+    inkText(ctx, sub, cx, panel.y + 158, { size: 28, font: 'hand', fill: INK, outline: 'none', maxWidth: panel.w - 60 });
+    inkText(ctx, sub2, cx, panel.y + 192, { size: 24, font: 'hand', fill: '#6b655c', outline: 'none', maxWidth: panel.w - 60 });
 
-    const rowY = Math.min(...buttons.map((b) => b.rect.y)) - 12;
-    const s = L.portrait ? 120 : 96;
+    const showScore = !!outcome && (kind === 'won' || g.endless);
+    if (showScore && outcome) {
+      if (kind === 'won') this.drawStars(cx, panel.y + 242, outcome.stars, 3);
+      inkText(ctx, `Score ${formatScore(outcome.score)}`, cx, panel.y + (kind === 'won' ? 286 : 248), {
+        size: 36,
+        fill: INK,
+        outline: 'none',
+        shadow: false,
+      });
+      const bestLine = g.endless
+        ? `Best: wave ${outcome.bestWave} · ${formatScore(outcome.bestScore)}`
+        : `Best: ${formatScore(outcome.bestScore)} · ${outcome.bestStars} ${outcome.bestStars === 1 ? 'star' : 'stars'}`;
+      inkText(ctx, bestLine, cx, panel.y + (kind === 'won' ? 326 : 288), {
+        size: 26,
+        font: 'hand',
+        fill: '#6b655c',
+        outline: 'none',
+      });
+      if (outcome.newScore || outcome.newWave) {
+        inkText(ctx, 'New Best!', cx, panel.y + (kind === 'won' ? 368 : 332), {
+          size: 32,
+          fill: '#c8392f',
+          lw: 6,
+        });
+      }
+    }
+
+    const rowY = Math.min(...buttons.map((b) => b.rect.y)) - 8;
+    const s = showScore ? (L.portrait ? 84 : 72) : L.portrait ? 110 : 92;
     const bob = Math.sin(v.time * 4) * 3;
-    if (kind === 'lost' && g.levelId === 3) {
-      this.drawSprite('pogoA', cx - 170, rowY + bob, s, frame);
+    if (kind === 'lost' && (g.levelId === 3 || g.endless)) {
+      this.drawSprite('pogoA', cx - 160, rowY + bob, s, frame);
       this.drawSprite('crabChomp', cx, rowY - bob, s * 1.02, frame);
-      this.drawSprite('bastion0', cx + 170, rowY + bob, s, frame);
+      this.drawSprite('bastion0', cx + 160, rowY + bob, s, frame);
     } else if (kind === 'lost') {
-      this.drawSprite('blob', cx - 170, rowY + bob, s * 0.86, frame);
+      this.drawSprite('blob', cx - 160, rowY + bob, s * 0.86, frame);
       this.drawSprite('beetleA', cx, rowY - bob, s, frame);
-      this.drawRoller(cx + 170, rowY + bob, s * 0.9, frame, v.time * -4);
-    } else if (g.toolOrder.includes('bastion')) {
-      this.drawSprite('bastion0', cx - 170, rowY + bob, s, frame);
-      this.drawSprite('wall0', cx, rowY - bob, s, frame);
-      this.drawSprite('trap', cx + 170, rowY + s * 0.06, s, frame);
+      this.drawRoller(cx + 160, rowY + bob, s * 0.9, frame, v.time * -4);
+    } else if (g.levelId === 3) {
+      this.drawSprite('wall0', cx - 160, rowY + bob, s, frame);
+      this.drawSprite('bastion0', cx, rowY - bob, s, frame);
+      this.drawSprite('shooter', cx + 160, rowY + bob, s, frame);
     } else {
-      this.drawSprite('wall0', cx - 170, rowY + bob, s, frame);
+      this.drawSprite('wall0', cx - 160, rowY + bob, s, frame);
       this.drawSprite('shooter', cx, rowY - bob, s, frame);
-      this.drawSprite('trap', cx + 170, rowY + s * 0.06, s, frame);
+      this.drawSprite('trap', cx + 160, rowY + s * 0.06, s, frame);
     }
     ctx.restore();
 
@@ -1027,18 +1134,18 @@ export class Renderer {
       const bob = Math.sin(v.time * 4 + i) * 3;
       let sx: number, sb: number, size: number, tx: number, ty: number, align: CanvasTextAlign;
       if (L.portrait) {
-        size = 108;
+        size = 92;
         sx = r.x + r.w / 2;
-        sb = r.y + 112;
+        sb = r.y + 96;
         tx = r.x + r.w / 2;
-        ty = r.y + 132;
+        ty = r.y + 114;
         align = 'center';
       } else {
-        size = 140;
-        sx = r.x + 84;
-        sb = r.y + r.h - 18;
-        tx = r.x + 168;
-        ty = r.y + 62;
+        size = 112;
+        sx = r.x + 72;
+        sb = r.y + r.h - 10;
+        tx = r.x + 150;
+        ty = r.y + 36;
         align = 'left';
       }
       if (c.name === 'roller') this.drawRoller(sx, sb + bob, size * 0.9, frame, -v.time * 5);
@@ -1051,10 +1158,10 @@ export class Renderer {
 
       const maxW = L.portrait ? r.w - 20 : r.w - 180;
       inkText(ctx, c.title.toUpperCase(), tx, ty, { size: L.portrait ? 26 : 25, fill: INK, align, outline: 'none', shadow: false, maxWidth: maxW });
-      inkText(ctx, c.blurb, tx, ty + (L.portrait ? 32 : 36), { size: L.portrait ? 23 : 24, font: 'hand', fill: '#5d574e', align, outline: 'none', maxWidth: maxW });
+      inkText(ctx, c.blurb, tx, ty + (L.portrait ? 26 : 30), { size: L.portrait ? 22 : 22, font: 'hand', fill: '#5d574e', align, outline: 'none', maxWidth: maxW });
       if (c.cost !== undefined) {
         const tagX = L.portrait ? r.x + r.w - 96 : tx;
-        const tagY = L.portrait ? r.y + 12 : ty + 64;
+        const tagY = L.portrait ? r.y + 8 : ty + 52;
         shape(ctx, rectPts(tagX, tagY, 86, 34, 12), rng, { fill: PAL.yellowHi, lw: 2.6 });
         ctx.drawImage(sprite('brickIcon', this.px(30), 0), tagX + 4, tagY + 1, 30, 30);
         inkText(ctx, String(c.cost), tagX + 58, tagY + 18, { size: 22, fill: INK, outline: 'none', shadow: false });
@@ -1080,24 +1187,56 @@ export class Renderer {
         radius: 22,
       });
       const lv = LEVELS[LEVEL_IDS[i]];
+      const best = v.records.levels[lv.id];
+      const bestLine = best ? `Best: ${formatScore(best.score)} · ${best.stars} ${best.stars === 1 ? 'star' : 'stars'}` : 'Best: —';
       if (L.portrait) {
-        inkText(ctx, `Level ${lv.id}  ·  ${lv.name}`, rect.x + rect.w / 2, y + rect.h / 2, {
-          size: 36,
+        inkText(ctx, `Level ${lv.id}  ·  ${lv.name}`, rect.x + rect.w / 2, y + rect.h * 0.36, {
+          size: 30,
           fill: '#fffdf7',
           maxWidth: rect.w - 28,
         });
-      } else {
-        inkText(ctx, `Level ${lv.id}`, rect.x + rect.w / 2, y + rect.h * 0.36, { size: 36, fill: '#fffdf7' });
-        inkText(ctx, lv.name, rect.x + rect.w / 2, y + rect.h * 0.72, {
-          size: 28,
+        inkText(ctx, bestLine, rect.x + rect.w / 2, y + rect.h * 0.72, {
+          size: 20,
           font: 'hand',
           fill: INK,
           outline: 'none',
           maxWidth: rect.w - 24,
         });
+      } else {
+        inkText(ctx, `Level ${lv.id}`, rect.x + rect.w / 2, y + rect.h * 0.28, { size: 30, fill: '#fffdf7' });
+        inkText(ctx, lv.name, rect.x + rect.w / 2, y + rect.h * 0.54, {
+          size: 22,
+          font: 'hand',
+          fill: INK,
+          outline: 'none',
+          maxWidth: rect.w - 24,
+        });
+        inkText(ctx, bestLine, rect.x + rect.w / 2, y + rect.h * 0.8, {
+          size: 18,
+          font: 'hand',
+          fill: INK,
+          outline: 'none',
+          maxWidth: rect.w - 20,
+        });
       }
     });
-    inkText(ctx, 'Keys 1, 2, 3 pick a level  ·  a tiny tower-defense game for Savyr', T.footer.x, T.footer.y, {
+
+    const endlessBest = v.records.endless;
+    const endlessLabel = endlessBest ? `Best: wave ${endlessBest.wave} · ${formatScore(endlessBest.score)}` : 'Best: —';
+    const ey = this.button(T.endless, PAL.purple, 1200, { lift: v.hoverUi === 'endless' ? 4 : 0, radius: 22 });
+    inkText(ctx, 'Endless', T.endless.x + T.endless.w / 2, ey + T.endless.h * 0.36, {
+      size: L.portrait ? 34 : 32,
+      fill: '#fffdf7',
+    });
+    inkText(ctx, endlessLabel, T.endless.x + T.endless.w / 2, ey + T.endless.h * 0.74, {
+      size: 20,
+      font: 'hand',
+      fill: '#fffdf7',
+      outline: 'none',
+      maxWidth: T.endless.w - 28,
+    });
+
+    inkText(ctx, 'Keys 1–3 pick a level  ·  4 is Endless  ·  bests stay on this device', T.footer.x, T.footer.y, {
       size: 22,
       font: 'hand',
       fill: '#8a8378',

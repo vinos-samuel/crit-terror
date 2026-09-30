@@ -2,8 +2,17 @@ import '@fontsource/luckiest-guy/400.css';
 import '@fontsource/patrick-hand/400.css';
 import './style.css';
 import { LEVELS, TOWERS, type LevelId, type TowerKind } from './config';
+import { mulberry32 } from './ink';
 import { cellAt, hit } from './layout';
-import { overlayLayout, Renderer, titleLayout, type Effect, type ViewState } from './render';
+import { overlayExtra, overlayLayout, Renderer, titleLayout, type Effect, type ViewState } from './render';
+import {
+  campaignScore,
+  endlessScore,
+  loadRecords,
+  recordEndless,
+  recordLevel,
+  type RunOutcome,
+} from './score';
 import { Game, makeShowcase, type GameEvent } from './sim';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
@@ -22,22 +31,29 @@ const view: ViewState = {
   denyTool: null,
   time: 0,
   hold: false,
+  records: loadRecords(),
+  outcome: null,
+  freezeFx: false,
 };
 
-function newGame(level: LevelId = view.game.levelId) {
-  view.game = new Game(Math.random, level);
+function newGame(level?: LevelId, endless?: boolean) {
+  const end = endless ?? (level === undefined && view.game.endless);
+  const id: LevelId = end ? 3 : (level ?? view.game.levelId);
+  view.game = new Game(Math.random, id, end);
   view.paused = false;
   view.selected = null;
   view.effects = [];
   view.toast = null;
   view.shakeT = 0;
   view.hold = false;
+  view.outcome = null;
+  view.freezeFx = false;
   view.screen = 'play';
   renderer.setTheme(view.game.theme);
 }
 
-function toast(text: string) {
-  view.toast = { text, t: 0, dur: 1.6 };
+function toast(text: string, dur = 1.6) {
+  view.toast = { text, t: 0, dur };
 }
 
 function addEffect(fx: Omit<Effect, 't'>) {
@@ -142,6 +158,38 @@ function handleEvents(events: GameEvent[]) {
           color: '#ffffff',
         });
         break;
+      case 'merge': {
+        const mx = L.lawn.x + (e.col + 0.5) * L.cellW;
+        const my = L.lawn.y + (e.row + 0.02) * L.cellH;
+        addEffect({
+          kind: 'puff',
+          x: mx,
+          y: L.lawn.y + (e.row + 0.88) * L.cellH,
+          dur: 0.55,
+          size: size * 0.62,
+        });
+        addEffect({
+          kind: 'word',
+          text: 'BASTION!',
+          x: mx,
+          y: my - size * 0.42,
+          dur: 1.45,
+          size: size * 0.34,
+          rot: -0.08,
+          color: '#ffd7a8',
+        });
+        addEffect({
+          kind: 'word',
+          text: 'MERGE!',
+          x: mx,
+          y: my + size * 0.08,
+          dur: 1.35,
+          size: size * 0.48,
+          rot: 0.06,
+          color: '#fff3a6',
+        });
+        break;
+      }
       case 'crunch':
         addEffect({
           kind: 'word',
@@ -191,10 +239,11 @@ function handleEvents(events: GameEvent[]) {
         });
         break;
       case 'waveStart':
-        if (e.wave === 0 && view.game.levelId > 1) toast(view.game.level.intro);
+        if (e.wave === 0 && view.game.endless) toast('Endless! Merge a Wall and a Shooter. How far can you go?');
+        else if (e.wave === 0 && view.game.levelId > 1) toast(view.game.level.intro);
         addEffect({
           kind: 'word',
-          text: e.wave === view.game.totalWaves - 1 ? 'FINAL WAVE!' : `WAVE ${e.wave + 1}!`,
+          text: !view.game.endless && e.wave === view.game.totalWaves - 1 ? 'FINAL WAVE!' : `WAVE ${e.wave + 1}!`,
           x: L.lawn.x + L.lawn.w / 2,
           y: L.lawn.y + L.lawn.h / 2,
           dur: 1.6,
@@ -239,18 +288,67 @@ function handleEvents(events: GameEvent[]) {
 
 // ---------- input ----------
 
+function commitOutcome() {
+  if (view.outcome) return;
+  const g = view.game;
+  if (g.endless) {
+    if (g.phase !== 'lost') return;
+    const score = endlessScore({
+      lives: g.lives,
+      bricks: g.bricks,
+      wavesCleared: g.waveIndex,
+      towersBuilt: g.towersBuilt,
+      bastionsBuilt: g.bastionsBuilt,
+    });
+    const wave = g.waveIndex + 1;
+    const rec = recordEndless(view.records, wave, score);
+    view.records = rec.records;
+    view.outcome = {
+      score,
+      stars: 0,
+      wave,
+      bestScore: rec.best.score,
+      bestStars: 0,
+      bestWave: rec.best.wave,
+      newScore: rec.newScore,
+      newWave: rec.newWave,
+    } satisfies RunOutcome;
+    return;
+  }
+  if (g.phase !== 'won') return;
+  const scored = campaignScore({
+    lives: g.lives,
+    bricks: g.bricks,
+    wavesCleared: g.waveIndex + 1,
+    towersBuilt: g.towersBuilt,
+    bastionsBuilt: g.bastionsBuilt,
+  });
+  const rec = recordLevel(view.records, g.levelId, scored.score, scored.stars);
+  view.records = rec.records;
+  view.outcome = {
+    score: scored.score,
+    stars: scored.stars,
+    wave: g.waveIndex + 1,
+    bestScore: rec.best.score,
+    bestStars: rec.best.stars,
+    bestWave: 0,
+    newScore: rec.isNew,
+    newWave: false,
+  };
+}
+
 function uiTargetAt(x: number, y: number): string | null {
   const L = renderer.L;
   if (view.screen === 'title') {
-    const levels = titleLayout(L).levels;
-    for (let i = 0; i < levels.length; i++) if (hit(levels[i], x, y, 6)) return `level${i + 1}`;
+    const title = titleLayout(L);
+    if (hit(title.endless, x, y, 6)) return 'endless';
+    for (let i = 0; i < title.levels.length; i++) if (hit(title.levels[i], x, y, 6)) return `level${i + 1}`;
     return null;
   }
   const g = view.game;
   if (g.phase === 'won' || g.phase === 'lost' || view.paused) {
     const kind = g.phase === 'won' || g.phase === 'lost' ? g.phase : 'pause';
-    const offerNext = kind === 'won' && g.levelId < 3;
-    for (const b of overlayLayout(L, kind, offerNext).buttons) if (hit(b.rect, x, y, 6)) return b.id;
+    for (const b of overlayLayout(L, kind, overlayExtra(g)).buttons) if (hit(b.rect, x, y, 6)) return b.id;
     return null;
   }
   if (hit(L.pauseBtn, x, y, 6)) return 'pause';
@@ -272,6 +370,9 @@ function onPointerDown(ev: PointerEvent) {
       return;
     case 'level3':
       newGame(3);
+      return;
+    case 'endless':
+      newGame(3, true);
       return;
     case 'next':
       newGame((view.game.levelId + 1) as LevelId);
@@ -327,12 +428,14 @@ window.addEventListener('keydown', (e) => {
     if (e.key === '1' || e.key === 'Enter') newGame(1);
     else if (e.key === '2') newGame(2);
     else if (e.key === '3') newGame(3);
+    else if (e.key === '4') newGame(3, true);
     return;
   }
   const g = view.game;
   if (g.phase === 'won' || g.phase === 'lost') {
-    if (e.key === 'n' || e.key === 'N') {
-      if (g.phase === 'won' && g.levelId < 3) newGame((g.levelId + 1) as LevelId);
+    if (e.key === 'n' || e.key === 'N' || e.key === '4') {
+      if (g.phase === 'won' && !g.endless && g.levelId < 3) newGame((g.levelId + 1) as LevelId);
+      else if (g.phase === 'won' && !g.endless && g.levelId === 3) newGame(3, true);
       return;
     }
     if (e.key === 'Enter' || e.key === 'r' || e.key === 'R') newGame();
@@ -370,9 +473,12 @@ function frame(now: number) {
   if (view.screen === 'play' && !view.paused && !view.hold) {
     view.game.update(dt);
     handleEvents(view.game.drainEvents());
+    commitOutcome();
   }
-  for (const fx of view.effects) fx.t += dt;
-  view.effects = view.effects.filter((fx) => fx.t < fx.dur);
+  if (!view.freezeFx) {
+    for (const fx of view.effects) fx.t += dt;
+    view.effects = view.effects.filter((fx) => fx.t < fx.dur);
+  }
   if (view.toast) {
     view.toast.t += dt;
     if (view.toast.t >= view.toast.dur) view.toast = null;
@@ -392,6 +498,30 @@ window.addEventListener('resize', () => {
   resizeRaf = requestAnimationFrame(() => renderer.resize());
 });
 
+/** Dev-only fast campaign, used by `?shot=win` to reach the real win screen. */
+function rushCampaign(level: LevelId, rng: () => number) {
+  const g = new Game(rng, level);
+  const rows = [2, 1, 3, 0, 4];
+  const plan: Array<readonly [TowerKind, number, number]> = [];
+  for (const col of [0, 1]) for (const row of rows) plan.push(['shooter', row, col]);
+  for (const row of rows) plan.push(['wall', row, 4]);
+  for (const row of rows) plan.push(['trap', row, 6]);
+  let t = 0;
+  while (g.phase !== 'won' && g.phase !== 'lost' && t < 900) {
+    if (g.phase === 'ready' || g.phase === 'intermission') {
+      for (const [kind, row, col] of plan) {
+        if (g.grid[row][col]) continue;
+        if (g.place(kind, row, col) !== 'ok') break;
+      }
+      if (g.phase === 'ready') g.startWave();
+    }
+    for (let i = 0; i < 8; i++) g.update(0.05);
+    t += 0.4;
+  }
+  g.drainEvents();
+  return g;
+}
+
 async function boot() {
   const fontsReady = Promise.all([
     document.fonts.load('40px "Luckiest Guy"'),
@@ -407,6 +537,33 @@ async function boot() {
     view.hold = true;
     view.paused = false;
     renderer.setTheme(LEVELS[level].theme);
+  } else if (import.meta.env.DEV && shot === 'merge') {
+    const g = new Game(mulberry32(3), 3);
+    g.place('shooter', 1, 1);
+    g.place('wall', 2, 4);
+    g.place('shooter', 2, 4);
+    g.place('trap', 3, 6);
+    g.insertEnemy('pogo', 2, 7.1, { age: 0.5 });
+    g.drainEvents();
+    view.game = g;
+    view.screen = 'play';
+    view.hold = true;
+    view.paused = false;
+    view.selected = 'shooter';
+    renderer.setTheme('quarry');
+    handleEvents([{ type: 'merge', row: 2, col: 4, paid: 50 }]);
+    for (const fx of view.effects) fx.t = Math.min(0.28, fx.dur * 0.22);
+    view.freezeFx = true;
+  } else if (import.meta.env.DEV && shot === 'win') {
+    view.game = rushCampaign(1, mulberry32(4));
+    view.screen = 'play';
+    view.hold = true;
+    view.paused = false;
+    renderer.setTheme(view.game.theme);
+    commitOutcome();
+  } else if (import.meta.env.DEV && shot === 'endless') {
+    newGame(3, true);
+    view.hold = true;
   }
   document.body.classList.add('ready');
   requestAnimationFrame((t) => {
