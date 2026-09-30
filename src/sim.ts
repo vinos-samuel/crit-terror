@@ -1,5 +1,6 @@
 import {
   COLS,
+  ENDLESS_START_BRICKS,
   ENEMIES,
   GLUE_LINGER,
   GLUE_SLOW,
@@ -21,6 +22,8 @@ import {
   TRICKLE_AMOUNT,
   TRICKLE_EVERY,
   WAVE_BONUS,
+  endlessWave,
+  isBastionMerge,
   type EnemyKind,
   type LevelId,
   type Theme,
@@ -76,6 +79,7 @@ export type GameEvent =
   | { type: 'kill'; row: number; x: number; reward: number; kind: EnemyKind }
   | { type: 'leak'; row: number }
   | { type: 'place'; row: number; col: number; kind: TowerKind }
+  | { type: 'merge'; row: number; col: number; paid: number }
   | { type: 'crunch'; row: number; col: number }
   | { type: 'waveStart'; wave: number }
   | { type: 'waveClear'; wave: number; bonus: number }
@@ -111,16 +115,23 @@ export class Game {
   intermissionT = 0;
   time = 0;
   readonly levelId: LevelId;
+  /** Infinite quarry waves. Uses Level 3 powers, map, and critter mods. */
+  readonly endless: boolean;
+  /** Pieces snapped onto empty squares. A merge does not increment this. */
+  towersBuilt = 0;
+  /** Wall + Shooter merges. The dropped piece is counted here, not in `towersBuilt`. */
+  bastionsBuilt = 0;
   private spawns: Spawn[] = [];
   private waveTime = 0;
   private trickleT = 0;
   private nextId = 1;
   private rng: () => number;
 
-  constructor(rng: () => number = Math.random, levelId: LevelId = 1) {
+  constructor(rng: () => number = Math.random, levelId: LevelId = 1, endless = false) {
     this.rng = rng;
-    this.levelId = levelId;
-    this.bricks = LEVELS[levelId].startBricks;
+    this.endless = endless;
+    this.levelId = endless ? 3 : levelId;
+    this.bricks = endless ? ENDLESS_START_BRICKS : LEVELS[this.levelId].startBricks;
     this.grid = Array.from({ length: ROWS }, () => Array<Tower | null>(COLS).fill(null));
   }
 
@@ -137,7 +148,7 @@ export class Game {
   }
 
   get totalWaves() {
-    return this.level.waves.length;
+    return this.endless ? Number.POSITIVE_INFINITY : this.level.waves.length;
   }
 
   get remaining() {
@@ -154,7 +165,8 @@ export class Game {
     if (this.phase === 'won' || this.phase === 'lost') return 'blocked';
     if (!this.toolOrder.includes(kind)) return 'blocked';
     if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return 'blocked';
-    if (this.grid[row][col]) return 'occupied';
+    const existing = this.grid[row][col];
+    if (existing && !isBastionMerge(kind, existing.kind)) return 'occupied';
     if (this.bricks < TOWERS[kind].cost) return 'bricks';
     return 'ok';
   }
@@ -162,8 +174,23 @@ export class Game {
   place(kind: TowerKind, row: number, col: number): PlaceCheck {
     const check = this.canPlace(kind, row, col);
     if (check !== 'ok') return check;
+    const existing = this.grid[row][col];
+    const cost = TOWERS[kind].cost;
+    this.bricks -= cost;
+    if (existing && isBastionMerge(kind, existing.kind)) {
+      const stats = TOWERS.bastion;
+      existing.kind = 'bastion';
+      existing.hp = stats.hp;
+      existing.maxHp = stats.hp;
+      existing.cooldown = 0.25;
+      existing.recoil = 0;
+      existing.hitT = 0;
+      existing.placedT = 0;
+      this.bastionsBuilt++;
+      this.events.push({ type: 'merge', row, col, paid: cost });
+      return 'ok';
+    }
     const stats = TOWERS[kind];
-    this.bricks -= stats.cost;
     this.grid[row][col] = {
       id: this.nextId++,
       kind,
@@ -176,6 +203,7 @@ export class Game {
       hitT: 0,
       placedT: 0,
     };
+    this.towersBuilt++;
     this.events.push({ type: 'place', row, col, kind });
     return 'ok';
   }
@@ -194,7 +222,7 @@ export class Game {
   }
 
   private buildWave(index: number): Spawn[] {
-    const def = this.level.waves[index];
+    const def = this.endless ? endlessWave(index) : this.level.waves[index];
     const light: EnemyKind[] = [];
     for (const kind of LIGHT) {
       for (let i = 0; i < this.countOf(def, kind); i++) light.push(kind);
@@ -214,8 +242,11 @@ export class Game {
     let lastRow = -1;
     let repeat = 0;
     const streakCap = this.level.rowStreak - 1;
-    const finalPushFrom = index === this.level.waves.length - 1 ? Math.floor(kinds.length * 0.7) : Infinity;
-    const hot = this.level.hotWaves > 0 && index >= this.level.waves.length - this.level.hotWaves;
+    const finalPushFrom =
+      this.endless || index === this.level.waves.length - 1 ? Math.floor(kinds.length * 0.7) : Infinity;
+    const hot = this.endless
+      ? index >= 3
+      : this.level.hotWaves > 0 && index >= this.level.waves.length - this.level.hotWaves;
     kinds.forEach((kind, i) => {
       let row: number;
       if (index === 0) {
@@ -270,11 +301,12 @@ export class Game {
     this.updateEnemies(dt);
 
     if (this.phase === 'wave' && this.spawns.length === 0 && this.enemies.length === 0) {
-      if (this.waveIndex >= this.level.waves.length - 1) {
+      const bonus = this.endless ? WAVE_BONUS + Math.min(80, this.waveIndex * 6) : WAVE_BONUS;
+      if (!this.endless && this.waveIndex >= this.level.waves.length - 1) {
         this.phase = 'won';
       } else {
-        this.bricks += WAVE_BONUS;
-        this.events.push({ type: 'waveClear', wave: this.waveIndex, bonus: WAVE_BONUS });
+        this.bricks += bonus;
+        this.events.push({ type: 'waveClear', wave: this.waveIndex, bonus });
         this.waveIndex++;
         this.phase = 'intermission';
         this.intermissionT = INTERMISSION;
@@ -290,7 +322,16 @@ export class Game {
   private statsFor(kind: EnemyKind) {
     const base = ENEMIES[kind];
     const mod = this.level.enemyMods?.[kind];
-    return mod ? { ...base, ...mod } : base;
+    const stats = mod ? { ...base, ...mod } : base;
+    if (!this.endless || this.waveIndex === 0) return stats;
+    const n = this.waveIndex;
+    return {
+      ...stats,
+      hp: Math.round(stats.hp * (1 + n * 0.05)),
+      speed: stats.speed * (1 + Math.min(0.22, n * 0.012)),
+      dps: Math.round(stats.dps * (1 + n * 0.03)),
+      reward: Math.round(stats.reward * (1 + n * 0.05)),
+    };
   }
 
   private spawn(kind: EnemyKind, row: number, x: number, extra: Partial<Enemy> = {}): Enemy {
@@ -517,11 +558,13 @@ export function makeShowcase(levelId: 2 | 3): Game {
     g.studs.push({ id: 9001, row: 2, x: 3.15 });
   } else {
     for (const row of [0, 1, 2, 3, 4]) {
-      g.place('bastion', row, 2);
+      g.place('wall', row, 2);
+      g.place('shooter', row, 2);
       g.place('trap', row, 5);
     }
     g.place('wall', 2, 4);
-    g.place('bastion', 1, 1);
+    g.place('wall', 1, 1);
+    g.place('shooter', 1, 1);
     g.insertEnemy('pogo', 1, 2.95, { hopT: POGO_HOP_DUR * 0.5, hopMax: POGO_HOP_DUR, age: 1.8 });
     g.insertEnemy('crab', 2, 4.2, { eating: true, age: 3, hp: 110 });
     g.insertEnemy('crab', 3, 7.35, { age: 1.2 });
