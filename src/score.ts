@@ -1,4 +1,11 @@
-import type { LevelId } from './config';
+import {
+  BASE_CRITTERS,
+  CRITTER_ORDER,
+  LEVEL_IDS,
+  REVEAL_ON_CLEAR,
+  type EnemyKind,
+  type LevelId,
+} from './config';
 
 /**
  * Campaign score (shown on a win):
@@ -9,7 +16,8 @@ import type { LevelId } from './config';
  *   score       = style + wavesCleared * 200
  *
  * `towersBuilt` counts pieces snapped onto empty squares.
- * `bastionsBuilt` counts Wall+Shooter merges (the dropped piece is not a second tower).
+ * `bastionsBuilt` counts every merge (Bastion, Missiler, Sticky Barricade, Twin Shot).
+ * The dropped piece is not a second tower. The thrift penalty is the same for each merge.
  * Stars use `style` so a longer level does not get free stars just for having more waves:
  *   3 stars at style >= 1880, 2 stars at style >= 950, otherwise 1 star for the win.
  * A full build with 3 lives and a full brick bonus (style 1750, thrift 0) is 2 stars.
@@ -59,6 +67,10 @@ export interface EndlessBest {
 export interface Records {
   levels: Partial<Record<LevelId, LevelBest>>;
   endless?: EndlessBest;
+  /** Highest campaign level that can be started. Level 1 is always open. Endless is never gated. */
+  unlockedLevel: LevelId;
+  /** Critters revealed on the title gallery. Endless still spawns the full roster. */
+  critters: EnemyKind[];
 }
 
 export interface RunOutcome {
@@ -70,6 +82,8 @@ export interface RunOutcome {
   bestWave: number;
   newScore: boolean;
   newWave: boolean;
+  /** Critter revealed by this clear, if it is the first time. */
+  revealed?: EnemyKind;
 }
 
 export function formatScore(n: number): string {
@@ -106,7 +120,38 @@ export function endlessScore(input: ScoreInput): number {
 }
 
 function emptyRecords(): Records {
-  return { levels: {} };
+  return { levels: {}, unlockedLevel: 1, critters: [...BASE_CRITTERS] };
+}
+
+export function isLevelUnlocked(records: Records, id: LevelId) {
+  return id <= records.unlockedLevel;
+}
+
+function applyUnlocks(records: Records): { records: Records; changed: boolean } {
+  let unlocked: LevelId = records.unlockedLevel ?? 1;
+  const critters = new Set<EnemyKind>(records.critters?.length ? records.critters : BASE_CRITTERS);
+  for (const id of BASE_CRITTERS) critters.add(id);
+  let changed = false;
+  for (const id of LEVEL_IDS) {
+    if (!records.levels[id]) continue;
+    const next = Math.min(6, id + 1) as LevelId;
+    if (next > unlocked) {
+      unlocked = next;
+      changed = true;
+    }
+    const reveal = REVEAL_ON_CLEAR[id];
+    if (reveal && !critters.has(reveal)) {
+      critters.add(reveal);
+      changed = true;
+    }
+  }
+  if ((records.unlockedLevel ?? 1) !== unlocked) changed = true;
+  const ordered = CRITTER_ORDER.filter((k) => critters.has(k));
+  if (ordered.length !== (records.critters?.length ?? 0)) changed = true;
+  return {
+    records: { ...records, unlockedLevel: unlocked, critters: ordered },
+    changed,
+  };
 }
 
 export function loadRecords(): Records {
@@ -116,7 +161,7 @@ export function loadRecords(): Records {
     if (!raw) return emptyRecords();
     const data = JSON.parse(raw) as Partial<Records>;
     const levels: Records['levels'] = {};
-    for (const id of [1, 2, 3] as const) {
+    for (const id of LEVEL_IDS) {
       const row = data.levels?.[id];
       if (!row || !Number.isFinite(row.score) || row.score < 0) continue;
       if (row.stars !== 1 && row.stars !== 2 && row.stars !== 3) continue;
@@ -129,7 +174,9 @@ export function loadRecords(): Records {
         score: Math.max(0, Math.floor(data.endless.score)),
       };
     }
-    return endless ? { levels, endless } : { levels };
+    const critters = CRITTER_ORDER.filter((k) => Array.isArray(data.critters) && data.critters.includes(k));
+    const unlockedLevel = LEVEL_IDS.includes(data.unlockedLevel as LevelId) ? (data.unlockedLevel as LevelId) : 1;
+    return applyUnlocks({ levels, endless, unlockedLevel, critters: critters.length ? critters : [...BASE_CRITTERS] }).records;
   } catch {
     return emptyRecords();
   }
@@ -149,12 +196,15 @@ export function recordLevel(
   level: LevelId,
   score: number,
   stars: 1 | 2 | 3,
-): { records: Records; best: LevelBest; isNew: boolean } {
+): { records: Records; best: LevelBest; isNew: boolean; revealed?: EnemyKind } {
   const prev = records.levels[level];
   const isNew = !prev || score > prev.score;
-  const next: Records = isNew ? { ...records, levels: { ...records.levels, [level]: { score, stars } } } : records;
-  if (isNew) saveRecords(next);
-  return { records: next, best: next.levels[level]!, isNew };
+  const firstClear = !prev;
+  const withScore: Records = isNew ? { ...records, levels: { ...records.levels, [level]: { score, stars } } } : records;
+  const unlocked = applyUnlocks(withScore);
+  const revealed = firstClear ? REVEAL_ON_CLEAR[level] : undefined;
+  if (isNew || unlocked.changed) saveRecords(unlocked.records);
+  return { records: unlocked.records, best: unlocked.records.levels[level]!, isNew, revealed };
 }
 
 export function recordEndless(

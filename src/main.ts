@@ -1,13 +1,14 @@
 import '@fontsource/luckiest-guy/400.css';
 import '@fontsource/patrick-hand/400.css';
 import './style.css';
-import { LEVELS, TOWERS, type LevelId, type TowerKind } from './config';
+import { LEVELS, LEVEL_IDS, MERGE_CUE, TOWERS, nextLevelId, type LevelId, type TowerKind } from './config';
 import { mulberry32 } from './ink';
 import { cellAt, hit } from './layout';
 import { overlayExtra, overlayLayout, Renderer, titleLayout, type Effect, type ViewState } from './render';
 import {
   campaignScore,
   endlessScore,
+  isLevelUnlocked,
   loadRecords,
   recordEndless,
   recordLevel,
@@ -34,6 +35,7 @@ const view: ViewState = {
   records: loadRecords(),
   outcome: null,
   freezeFx: false,
+  reveal: null,
 };
 
 function newGame(level?: LevelId, endless?: boolean) {
@@ -48,6 +50,7 @@ function newGame(level?: LevelId, endless?: boolean) {
   view.hold = false;
   view.outcome = null;
   view.freezeFx = false;
+  view.reveal = null;
   view.screen = 'play';
   renderer.setTheme(view.game.theme);
 }
@@ -96,14 +99,34 @@ function handleEvents(events: GameEvent[]) {
   for (const e of events) {
     switch (e.type) {
       case 'hit':
-        addEffect({
-          kind: 'pop',
-          x: L.lawn.x + (e.x - 0.15) * L.cellW,
-          y: laneY(e.row) - size * 0.05,
-          dur: 0.22,
-          size: size * 0.16,
-          gray: e.armored,
-        });
+        if (e.missile && e.shell) {
+          addEffect({
+            kind: 'word',
+            text: 'CRACK!',
+            x: L.lawn.x + e.x * L.cellW,
+            y: laneY(e.row) - size * 0.55,
+            dur: 0.7,
+            size: size * 0.38,
+            rot: -0.08,
+            color: '#ffb15a',
+          });
+          addEffect({
+            kind: 'pop',
+            x: L.lawn.x + e.x * L.cellW,
+            y: laneY(e.row) - size * 0.1,
+            dur: 0.34,
+            size: size * 0.42,
+          });
+        } else {
+          addEffect({
+            kind: 'pop',
+            x: L.lawn.x + (e.x - 0.15) * L.cellW,
+            y: laneY(e.row) - size * 0.05,
+            dur: e.missile ? 0.16 : 0.22,
+            size: size * (e.missile ? 0.1 : 0.16),
+            gray: e.armored || e.missile,
+          });
+        }
         break;
       case 'kill':
         addEffect({
@@ -114,7 +137,22 @@ function handleEvents(events: GameEvent[]) {
           dur: 0.7,
           size: size * 0.3,
           rot: (Math.random() - 0.5) * 0.4,
-          color: e.kind === 'beetle' ? '#cbb8f0' : e.kind === 'roller' ? '#fde99a' : e.kind === 'pogo' ? '#ffc2a1' : e.kind === 'crab' ? '#f4a19a' : '#c8ec9f',
+          color:
+            e.kind === 'beetle'
+              ? '#cbb8f0'
+              : e.kind === 'roller'
+                ? '#fde99a'
+                : e.kind === 'pogo'
+                  ? '#ffc2a1'
+                  : e.kind === 'crab'
+                    ? '#f4a19a'
+                    : e.kind === 'wisp'
+                      ? '#d5e4f2'
+                      : e.kind === 'skitter'
+                        ? '#8ea0e0'
+                        : e.kind === 'moth'
+                          ? '#f7c6de'
+                          : '#c8ec9f',
         });
         addEffect({
           kind: 'float',
@@ -162,6 +200,13 @@ function handleEvents(events: GameEvent[]) {
         const mx = L.lawn.x + (e.col + 0.5) * L.cellW;
         const my = L.lawn.y + (e.row + 0.38) * L.cellH;
         const gap = Math.max(124, size * 1.5);
+        const [top, bottom] = MERGE_CUE[e.into];
+        const colors: Record<typeof e.into, [string, string]> = {
+          bastion: ['#fff3a6', '#ffd7a8'],
+          missiler: ['#ffb15a', '#fff3a6'],
+          sticky: ['#f8d55a', '#fff6c2'],
+          twin: ['#a3c2f5', '#fff3a6'],
+        };
         addEffect({
           kind: 'puff',
           x: mx,
@@ -171,23 +216,23 @@ function handleEvents(events: GameEvent[]) {
         });
         addEffect({
           kind: 'word',
-          text: 'MERGE!',
+          text: top,
           x: mx,
           y: my,
           dur: 1.7,
           size: size * 0.42,
           rot: 0.05,
-          color: '#fff3a6',
+          color: colors[e.into][0],
         });
         addEffect({
           kind: 'word',
-          text: 'BASTION!',
+          text: bottom,
           x: mx,
           y: my - gap,
           dur: 1.85,
           size: size * 0.32,
           rot: -0.06,
-          color: '#ffd7a8',
+          color: colors[e.into][1],
         });
         break;
       }
@@ -240,7 +285,7 @@ function handleEvents(events: GameEvent[]) {
         });
         break;
       case 'waveStart':
-        if (e.wave === 0 && view.game.endless) toast('Endless! Merge a Wall and a Shooter. How far can you go?');
+        if (e.wave === 0 && view.game.endless) toast('Endless! Every critter can show up. How far can you go?');
         else if (e.wave === 0 && view.game.levelId > 1) toast(view.game.level.intro);
         addEffect({
           kind: 'word',
@@ -326,6 +371,7 @@ function commitOutcome() {
   });
   const rec = recordLevel(view.records, g.levelId, scored.score, scored.stars);
   view.records = rec.records;
+  if (rec.revealed) view.reveal = rec.revealed;
   view.outcome = {
     score: scored.score,
     stars: scored.stars,
@@ -335,6 +381,7 @@ function commitOutcome() {
     bestWave: 0,
     newScore: rec.isNew,
     newWave: false,
+    revealed: rec.revealed,
   };
 }
 
@@ -343,7 +390,7 @@ function uiTargetAt(x: number, y: number): string | null {
   if (view.screen === 'title') {
     const title = titleLayout(L);
     if (hit(title.endless, x, y, 6)) return 'endless';
-    for (let i = 0; i < title.levels.length; i++) if (hit(title.levels[i], x, y, 6)) return `level${i + 1}`;
+    for (let i = 0; i < title.levels.length; i++) if (hit(title.levels[i], x, y, 6)) return `level${LEVEL_IDS[i]}`;
     return null;
   }
   const g = view.game;
@@ -363,21 +410,14 @@ function onPointerDown(ev: PointerEvent) {
   const { x, y } = renderer.toDesign(ev.clientX, ev.clientY);
   const target = uiTargetAt(x, y);
   switch (target) {
-    case 'level1':
-      newGame(1);
-      return;
-    case 'level2':
-      newGame(2);
-      return;
-    case 'level3':
-      newGame(3);
-      return;
     case 'endless':
       newGame(3, true);
       return;
-    case 'next':
-      newGame((view.game.levelId + 1) as LevelId);
+    case 'next': {
+      const next = nextLevelId(view.game.levelId);
+      if (next) newGame(next);
       return;
+    }
     case 'restart':
       newGame();
       return;
@@ -393,6 +433,11 @@ function onPointerDown(ev: PointerEvent) {
       startWave();
       return;
     default:
+      if (target?.startsWith('level')) {
+        const id = Number(target.slice(5)) as LevelId;
+        if (isLevelUnlocked(view.records, id)) newGame(id);
+        return;
+      }
       if (target && (view.game.toolOrder as readonly string[]).includes(target)) {
         selectTool(target as TowerKind);
         return;
@@ -426,17 +471,19 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
   if (view.screen === 'title') {
-    if (e.key === '1' || e.key === 'Enter') newGame(1);
-    else if (e.key === '2') newGame(2);
-    else if (e.key === '3') newGame(3);
-    else if (e.key === '4') newGame(3, true);
+    if (e.key === 'Enter') newGame(1);
+    else if (e.key >= '1' && e.key <= '6') {
+      const id = Number(e.key) as LevelId;
+      if (isLevelUnlocked(view.records, id)) newGame(id);
+    } else if (e.key === '7') newGame(3, true);
     return;
   }
   const g = view.game;
   if (g.phase === 'won' || g.phase === 'lost') {
-    if (e.key === 'n' || e.key === 'N' || e.key === '4') {
-      if (g.phase === 'won' && !g.endless && g.levelId < 3) newGame((g.levelId + 1) as LevelId);
-      else if (g.phase === 'won' && !g.endless && g.levelId === 3) newGame(3, true);
+    if (e.key === 'n' || e.key === 'N') {
+      const next = nextLevelId(g.levelId);
+      if (g.phase === 'won' && !g.endless && next) newGame(next);
+      else if (g.phase === 'won' && !g.endless) newGame(3, true);
       return;
     }
     if (e.key === 'Enter' || e.key === 'r' || e.key === 'R') newGame();
@@ -531,8 +578,8 @@ async function boot() {
   await Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))]);
   renderer.resize();
   const shot = new URLSearchParams(location.search).get('shot');
-  if (shot === '2' || shot === '3') {
-    const level = shot === '2' ? 2 : 3;
+  if (shot === '2' || shot === '3' || shot === '4' || shot === '5' || shot === '6') {
+    const level = Number(shot) as 2 | 3 | 4 | 5 | 6;
     view.game = makeShowcase(level);
     view.screen = 'play';
     view.hold = true;
@@ -552,9 +599,102 @@ async function boot() {
     view.paused = false;
     view.selected = 'shooter';
     renderer.setTheme('quarry');
-    handleEvents([{ type: 'merge', row: 2, col: 4, paid: 50 }]);
+    handleEvents([{ type: 'merge', row: 2, col: 4, paid: 50, into: 'bastion' }]);
     for (const fx of view.effects) fx.t = Math.min(0.28, fx.dur * 0.22);
     view.freezeFx = true;
+  } else if (import.meta.env.DEV && shot === 'missiler') {
+    const g = new Game(mulberry32(6), 6);
+    g.place('wall', 0, 4);
+    g.place('trap', 2, 2);
+    g.place('shooter', 2, 2);
+    g.place('shooter', 1, 1);
+    g.insertEnemy('moth', 2, 5.6, { age: 1.2, hp: 48 });
+    g.insertEnemy('moth', 1, 7.4, { age: 0.6 });
+    g.insertEnemy('moth', 0, 6.2, { age: 0.9 });
+    g.insertEnemy('beetle', 3, 6.8, { age: 1 });
+    g.studs.push({ id: 9101, row: 2, x: 4.1, missile: true });
+    g.drainEvents();
+    view.game = g;
+    view.screen = 'play';
+    view.hold = true;
+    view.paused = false;
+    view.selected = 'trap';
+    renderer.setTheme('sky');
+    handleEvents([
+      { type: 'merge', row: 2, col: 2, paid: 50, into: 'missiler' },
+      { type: 'hit', row: 2, x: 5.6, armored: false, missile: true, shell: true },
+    ]);
+    for (const fx of view.effects) fx.t = Math.min(0.22, fx.dur * 0.18);
+    view.freezeFx = true;
+  } else if (import.meta.env.DEV && shot === 'merges') {
+    const g = new Game(mulberry32(9), 2);
+    g.bricks = 800;
+    g.place('wall', 1, 2);
+    g.place('trap', 1, 2);
+    g.place('shooter', 2, 4);
+    g.place('shooter', 2, 4);
+    g.place('trap', 3, 3);
+    g.place('shooter', 3, 3);
+    g.insertEnemy('blob', 1, 3.4, { age: 1.2, slowT: 0.8 });
+    g.insertEnemy('roller', 2, 6.2, { age: 0.7 });
+    g.insertEnemy('beetle', 3, 5.5, { age: 1.4 });
+    g.drainEvents();
+    view.game = g;
+    view.screen = 'play';
+    view.hold = true;
+    view.paused = false;
+    renderer.setTheme('lawn');
+    handleEvents([
+      { type: 'merge', row: 1, col: 2, paid: 30, into: 'sticky' },
+      { type: 'merge', row: 2, col: 4, paid: 50, into: 'twin' },
+      { type: 'merge', row: 3, col: 3, paid: 50, into: 'missiler' },
+    ]);
+    for (const fx of view.effects) fx.t = Math.min(0.24, fx.dur * 0.2);
+    view.freezeFx = true;
+  } else if (import.meta.env.DEV && shot === 'unlock') {
+    view.records = {
+      levels: {
+        1: { score: 2140, stars: 2 },
+        2: { score: 2480, stars: 2 },
+        3: { score: 2710, stars: 2 },
+      },
+      unlockedLevel: 4,
+      critters: ['blob', 'beetle', 'roller', 'pogo', 'crab', 'wisp'],
+    };
+    view.reveal = 'wisp';
+    view.screen = 'title';
+  } else if (import.meta.env.DEV && shot === 'winreveal') {
+    const g = new Game(mulberry32(4), 3);
+    g.phase = 'won';
+    g.lives = 2;
+    g.bricks = 90;
+    g.waveIndex = LEVELS[3].waves.length - 1;
+    view.game = g;
+    view.screen = 'play';
+    view.hold = true;
+    view.paused = false;
+    view.records = {
+      levels: {
+        1: { score: 2140, stars: 2 },
+        2: { score: 2480, stars: 2 },
+        3: { score: 2710, stars: 2 },
+      },
+      unlockedLevel: 4,
+      critters: ['blob', 'beetle', 'roller', 'pogo', 'crab', 'wisp'],
+    };
+    view.reveal = 'wisp';
+    view.outcome = {
+      score: 2710,
+      stars: 2,
+      wave: 6,
+      bestScore: 2710,
+      bestStars: 2,
+      bestWave: 0,
+      newScore: true,
+      newWave: false,
+      revealed: 'wisp',
+    };
+    renderer.setTheme('quarry');
   } else if (import.meta.env.DEV && shot === 'win') {
     view.game = rushCampaign(1, mulberry32(4));
     view.screen = 'play';

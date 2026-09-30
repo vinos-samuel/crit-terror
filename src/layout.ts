@@ -1,4 +1,4 @@
-import { COLS, ROWS, type TowerKind } from './config';
+import { COLS, ROWS, type ToolKind } from './config';
 
 export interface Rect {
   x: number;
@@ -21,7 +21,7 @@ export interface Layout {
   rift: Rect;
   cellW: number;
   cellH: number;
-  tools: Record<TowerKind, Rect>;
+  tools: Record<ToolKind, Rect>;
   startBtn: Rect;
   hint: { x: number; y: number; w: number };
 }
@@ -48,7 +48,6 @@ function landscape(): Layout {
     tools: {
       wall: r(160, 574, 278, 126),
       shooter: r(470, 574, 302, 126),
-      bastion: r(470, 574, 302, 126),
       trap: r(804, 574, 278, 126),
     },
     startBtn: r(1104, 586, 164, 104),
@@ -89,7 +88,6 @@ function portrait(aspect: number): Layout {
     tools: {
       wall: r(16, toolsY, 222, toolH),
       shooter: r(249, toolsY, 222, toolH),
-      bastion: r(249, toolsY, 222, toolH),
       trap: r(482, toolsY, 222, toolH),
     },
     startBtn: r(150, startY, 420, 104),

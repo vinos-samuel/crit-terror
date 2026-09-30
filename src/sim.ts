@@ -8,6 +8,10 @@ import {
   HOP_DUR,
   INTERMISSION,
   LEVELS,
+  MISSILE_COOLDOWN,
+  MISSILE_SHELL,
+  MISSILE_SOFT,
+  MISSILE_SPEED,
   POGO_HOP_DIST,
   POGO_HOP_DUR,
   REVIVE_HP,
@@ -23,9 +27,10 @@ import {
   TRICKLE_EVERY,
   WAVE_BONUS,
   endlessWave,
-  isBastionMerge,
+  mergeInto,
   type EnemyKind,
   type LevelId,
+  type MergeKind,
   type Theme,
   type TowerKind,
 } from './config';
@@ -72,14 +77,15 @@ export interface Stud {
   id: number;
   row: number;
   x: number;
+  missile?: boolean;
 }
 
 export type GameEvent =
-  | { type: 'hit'; row: number; x: number; armored: boolean }
+  | { type: 'hit'; row: number; x: number; armored: boolean; missile: boolean; shell: boolean }
   | { type: 'kill'; row: number; x: number; reward: number; kind: EnemyKind }
   | { type: 'leak'; row: number }
   | { type: 'place'; row: number; col: number; kind: TowerKind }
-  | { type: 'merge'; row: number; col: number; paid: number }
+  | { type: 'merge'; row: number; col: number; paid: number; into: MergeKind }
   | { type: 'crunch'; row: number; col: number }
   | { type: 'waveStart'; wave: number }
   | { type: 'waveClear'; wave: number; bonus: number }
@@ -100,7 +106,7 @@ interface Spawn {
 // Wave 1 teaches the game: critters stick to the middle lanes so a starter stash covers them.
 const FIRST_WAVE_ROWS = [2, 1, 3, 2, 1, 3];
 
-const LIGHT: EnemyKind[] = ['blob', 'roller', 'pogo'];
+const LIGHT: EnemyKind[] = ['blob', 'roller', 'pogo', 'wisp', 'skitter', 'moth'];
 const HEAVY: EnemyKind[] = ['beetle', 'crab'];
 
 export class Game {
@@ -115,11 +121,18 @@ export class Game {
   intermissionT = 0;
   time = 0;
   readonly levelId: LevelId;
-  /** Infinite quarry waves. Uses Level 3 powers, map, and critter mods. */
+  /**
+   * Infinite quarry waves. Uses Level 3 powers, map, and critter mods.
+   * The roster is the full critter list (see `endlessWave`), not the title unlocks.
+   */
   readonly endless: boolean;
   /** Pieces snapped onto empty squares. A merge does not increment this. */
   towersBuilt = 0;
-  /** Wall + Shooter merges. The dropped piece is counted here, not in `towersBuilt`. */
+  /**
+   * Merges (Bastion, Missiler, Sticky Barricade, Twin Shot).
+   * The dropped piece is counted here, not in `towersBuilt`.
+   * Scoring still reads this field — every merge pays the old Bastion thrift penalty.
+   */
   bastionsBuilt = 0;
   private spawns: Spawn[] = [];
   private waveTime = 0;
@@ -143,7 +156,7 @@ export class Game {
     return this.level.theme;
   }
 
-  get toolOrder(): TowerKind[] {
+  get toolOrder() {
     return this.level.tools;
   }
 
@@ -163,10 +176,11 @@ export class Game {
 
   canPlace(kind: TowerKind, row: number, col: number): PlaceCheck {
     if (this.phase === 'won' || this.phase === 'lost') return 'blocked';
+    if (kind !== 'wall' && kind !== 'shooter' && kind !== 'trap') return 'blocked';
     if (!this.toolOrder.includes(kind)) return 'blocked';
     if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return 'blocked';
     const existing = this.grid[row][col];
-    if (existing && !isBastionMerge(kind, existing.kind)) return 'occupied';
+    if (existing && !mergeInto(kind, existing.kind, this.level.extraMerges)) return 'occupied';
     if (this.bricks < TOWERS[kind].cost) return 'bricks';
     return 'ok';
   }
@@ -177,9 +191,10 @@ export class Game {
     const existing = this.grid[row][col];
     const cost = TOWERS[kind].cost;
     this.bricks -= cost;
-    if (existing && isBastionMerge(kind, existing.kind)) {
-      const stats = TOWERS.bastion;
-      existing.kind = 'bastion';
+    const into = existing ? mergeInto(kind, existing.kind, this.level.extraMerges) : null;
+    if (existing && into) {
+      const stats = TOWERS[into];
+      existing.kind = into;
       existing.hp = stats.hp;
       existing.maxHp = stats.hp;
       existing.cooldown = 0.25;
@@ -187,7 +202,7 @@ export class Game {
       existing.hitT = 0;
       existing.placedT = 0;
       this.bastionsBuilt++;
-      this.events.push({ type: 'merge', row, col, paid: cost });
+      this.events.push({ type: 'merge', row, col, paid: cost, into });
       return 'ok';
     }
     const stats = TOWERS[kind];
@@ -247,10 +262,11 @@ export class Game {
     const hot = this.endless
       ? index >= 3
       : this.level.hotWaves > 0 && index >= this.level.waves.length - this.level.hotWaves;
+    const opening = this.level.openingRows ?? FIRST_WAVE_ROWS;
     kinds.forEach((kind, i) => {
       let row: number;
       if (index === 0) {
-        row = FIRST_WAVE_ROWS[i % FIRST_WAVE_ROWS.length];
+        row = opening[i % opening.length];
       } else if (hot && this.rng() < 0.62) {
         row = 1 + Math.floor(this.rng() * 3);
       } else {
@@ -360,7 +376,7 @@ export class Game {
   }
 
   private shoots(kind: TowerKind) {
-    return kind === 'shooter' || kind === 'bastion';
+    return kind === 'shooter' || kind === 'bastion' || kind === 'missiler' || kind === 'twin';
   }
 
   private updateTowers(dt: number) {
@@ -370,8 +386,12 @@ export class Game {
       if (t.cooldown > 0) continue;
       const target = this.enemies.some((e) => e.row === t.row && e.x > t.col + 0.3 && e.x < COLS - 0.05);
       if (target) {
-        this.studs.push({ id: this.nextId++, row: t.row, x: t.col + 0.85 });
-        t.cooldown = SHOOTER_COOLDOWN;
+        const missile = t.kind === 'missiler';
+        const shots = t.kind === 'twin' ? 2 : 1;
+        for (let i = 0; i < shots; i++) {
+          this.studs.push({ id: this.nextId++, row: t.row, x: t.col + 0.85 - i * 0.42, missile });
+        }
+        t.cooldown = missile ? MISSILE_COOLDOWN : SHOOTER_COOLDOWN;
         t.recoil = 1;
       }
     }
@@ -400,7 +420,7 @@ export class Game {
   private updateStuds(dt: number) {
     const keep: Stud[] = [];
     for (const s of this.studs) {
-      s.x += STUD_SPEED * dt;
+      s.x += (s.missile ? MISSILE_SPEED : STUD_SPEED) * dt;
       let target: Enemy | null = null;
       for (const e of this.enemies) {
         if (e.row !== s.row || e.hp <= 0) continue;
@@ -409,9 +429,11 @@ export class Game {
       if (target) {
         const stats = this.statsFor(target.kind);
         const armor = this.armorOf(target);
-        target.hp -= STUD_DAMAGE * armor;
+        const shell = !!stats.shell;
+        const damage = s.missile ? (shell ? MISSILE_SHELL : MISSILE_SOFT * armor) : STUD_DAMAGE * armor;
+        target.hp -= damage;
         target.hitT = 0.18;
-        this.events.push({ type: 'hit', row: s.row, x: target.x, armored: armor < 1 });
+        this.events.push({ type: 'hit', row: s.row, x: target.x, armored: !s.missile && armor < 1, missile: !!s.missile, shell });
         if (target.hp <= 0 && !this.tryRevive(target)) {
           this.bricks += stats.reward;
           this.events.push({ type: 'kill', row: target.row, x: target.x, reward: stats.reward, kind: target.kind });
@@ -424,7 +446,12 @@ export class Game {
     this.enemies = this.enemies.filter((e) => e.hp > 0);
   }
 
+  private flies(e: Enemy) {
+    return !!this.statsFor(e.kind).flying;
+  }
+
   private blockerFor(e: Enemy): Tower | null {
+    if (this.flies(e)) return null;
     const c0 = Math.floor(e.x - 0.3);
     for (let c = Math.min(COLS - 1, c0 + 1); c >= Math.max(0, c0 - 1); c--) {
       const t = this.grid[e.row][c];
@@ -432,6 +459,30 @@ export class Game {
       if (e.x > c + 0.5 && e.x - 0.3 <= c + 0.95) return t;
     }
     return null;
+  }
+
+  /** Sticky Barricade gums critters in the next squares and the lanes beside it. */
+  private nearSticky(e: Enemy) {
+    if (this.flies(e)) return false;
+    const col = Math.floor(e.x);
+    for (const dc of [-1, 0, 1]) {
+      const c = col + dc;
+      if (c < 0 || c >= COLS) continue;
+      const t = this.grid[e.row][c];
+      if (t?.kind === 'sticky' && Math.abs(e.x - (c + 0.5)) < 1.15) return true;
+    }
+    for (const dr of [-1, 1]) {
+      const r = e.row + dr;
+      if (r < 0 || r >= ROWS) continue;
+      if (col < 0 || col >= COLS) continue;
+      const t = this.grid[r][col];
+      if (t?.kind === 'sticky' && Math.abs(e.x - (col + 0.5)) < 0.7) return true;
+    }
+    return false;
+  }
+
+  private glueImmune(e: Enemy) {
+    return e.kind === 'beetle' && this.level.powers.beetleGlueImmune;
   }
 
   private canHop(e: Enemy, blocker: Tower) {
@@ -470,18 +521,16 @@ export class Game {
         e.eating = false;
       } else {
         const col = Math.floor(e.x);
-        if (col >= 0 && col < COLS) {
+        if (!this.flies(e) && col >= 0 && col < COLS) {
           const t = this.grid[e.row][col];
-          if (t?.kind === 'trap' && Math.abs(e.x - (col + 0.5)) < 0.45) {
-            const immune = e.kind === 'beetle' && this.level.powers.beetleGlueImmune;
-            if (immune) {
-              if (e.shrugCol !== col) {
-                e.shrugCol = col;
-                this.events.push({ type: 'shrug', row: e.row, x: e.x });
-              }
-            } else {
-              e.slowT = GLUE_LINGER;
+          const onTrap = t?.kind === 'trap' && Math.abs(e.x - (col + 0.5)) < 0.45;
+          if (onTrap && this.glueImmune(e)) {
+            if (e.shrugCol !== col) {
+              e.shrugCol = col;
+              this.events.push({ type: 'shrug', row: e.row, x: e.x });
             }
+          } else if ((onTrap || this.nearSticky(e)) && !this.glueImmune(e)) {
+            e.slowT = GLUE_LINGER;
           }
         }
         const blocker = this.blockerFor(e);
@@ -534,7 +583,7 @@ function shuffle<T>(arr: T[], rng: () => number) {
  * A still scene for screenshots: towers down, powers mid-animation, sim not required to be running.
  * Bricks are topped up so the tableau can place a full lane of towers.
  */
-export function makeShowcase(levelId: 2 | 3): Game {
+export function makeShowcase(levelId: 2 | 3 | 4 | 5 | 6): Game {
   const g = new Game(() => 0.5, levelId);
   g.bricks = 4000;
   if (levelId === 2) {
@@ -556,7 +605,7 @@ export function makeShowcase(levelId: 2 | 3): Game {
     g.insertEnemy('blob', 0, 7.6, { age: 1.1 });
     g.insertEnemy('roller', 4, 8.15, { age: 0.8 });
     g.studs.push({ id: 9001, row: 2, x: 3.15 });
-  } else {
+  } else if (levelId === 3) {
     for (const row of [0, 1, 2, 3, 4]) {
       g.place('wall', row, 2);
       g.place('shooter', row, 2);
@@ -573,9 +622,49 @@ export function makeShowcase(levelId: 2 | 3): Game {
     g.insertEnemy('blob', 1, 8.2, { age: 0.6 });
     g.studs.push({ id: 9002, row: 1, x: 2.7 });
     g.studs.push({ id: 9003, row: 2, x: 3.4 });
+  } else if (levelId === 4) {
+    for (const row of [0, 4]) {
+      g.place('trap', row, 5);
+      g.place('shooter', row, 2);
+    }
+    g.place('wall', 2, 3);
+    g.place('trap', 2, 3);
+    g.place('shooter', 1, 1);
+    g.place('shooter', 3, 1);
+    g.insertEnemy('wisp', 0, 6.4, { age: 1.4 });
+    g.insertEnemy('wisp', 4, 7.2, { age: 1.1 });
+    g.insertEnemy('wisp', 0, 2.4, { age: 2.2, slowT: 0.8 });
+    g.insertEnemy('blob', 2, 5.5, { age: 1.6 });
+    g.insertEnemy('beetle', 1, 7.8, { age: 0.8 });
+    g.studs.push({ id: 9004, row: 0, x: 3.2 });
+  } else if (levelId === 5) {
+    for (const row of [1, 2, 3]) g.place('shooter', row, 1);
+    g.place('wall', 2, 3);
+    g.place('shooter', 0, 2);
+    g.place('trap', 4, 4);
+    g.insertEnemy('skitter', 1, 6.8, { age: 0.6 });
+    g.insertEnemy('skitter', 2, 7.6, { age: 0.4 });
+    g.insertEnemy('skitter', 3, 4.2, { age: 1.5 });
+    g.insertEnemy('blob', 0, 6.2, { age: 1.2 });
+    g.insertEnemy('beetle', 4, 7.4, { age: 0.9 });
+    g.studs.push({ id: 9005, row: 2, x: 3.1 });
+  } else {
+    for (const row of [1, 2, 3]) {
+      g.place('trap', row, 2);
+      g.place('shooter', row, 2);
+    }
+    g.place('wall', 0, 3);
+    g.place('wall', 4, 4);
+    g.place('shooter', 0, 1);
+    g.insertEnemy('moth', 2, 6.4, { age: 1.3, hp: 40 });
+    g.insertEnemy('moth', 1, 7.5, { age: 0.7 });
+    g.insertEnemy('moth', 3, 5.2, { age: 1.8 });
+    g.insertEnemy('moth', 0, 8.1, { age: 0.4 });
+    g.studs.push({ id: 9006, row: 2, x: 4.2, missile: true });
+    g.studs.push({ id: 9007, row: 1, x: 3.4, missile: true });
   }
   for (const t of g.towers()) t.placedT = 8;
-  g.bricks = levelId === 2 ? 85 : 110;
+  g.bricks = levelId === 2 ? 85 : levelId === 6 ? 70 : 110;
   g.lives = 2;
   g.waveIndex = levelId === 2 ? 2 : 3;
   g.phase = 'wave';
