@@ -25,6 +25,11 @@ export const PAL = {
   crab: '#ef7d6a',
   crabDark: '#c45448',
   crabHi: '#ffc3b6',
+  mist: '#d5e4f2',
+  mistDark: '#8eafc9',
+  nightBug: '#6d7ec4',
+  wing: '#f7c6de',
+  wingDeep: '#e592c0',
   slate: '#8e9aab',
   slateDark: '#5e6b7c',
   slateHi: '#d5dde6',
@@ -48,6 +53,13 @@ export type SpriteName =
   | 'pogoB'
   | 'crabWalk'
   | 'crabChomp'
+  | 'missiler'
+  | 'sticky'
+  | 'twin'
+  | 'wisp'
+  | 'skitter'
+  | 'moth'
+  | 'missile'
   | 'brickIcon'
   | 'heart'
   | 'heartEmpty'
@@ -619,6 +631,149 @@ function drawCrab(chomp: boolean): Drawer {
   };
 }
 
+const drawMissiler: Drawer = (ctx, rng) => {
+  ground(ctx, rng, 50, 90, 40);
+  const pad = ellipsePts(50, 78, 36, 14, 18, rng, 0.25);
+  shape(ctx, pad, rng, { fill: PAL.yellow, lw: 2.6 });
+  brickBlock(ctx, rng, 16, 48, 52, 28, 7, { front: PAL.blue, top: PAL.blueTop, side: PAL.blueSide }, 2);
+  const tube: Pt[] = [
+    { x: 34, y: 52 },
+    { x: 46, y: 18 },
+    { x: 64, y: 16 },
+    { x: 58, y: 50 },
+  ];
+  shape(ctx, tube, rng, { fill: PAL.orange, lw: 3 });
+  hatch(ctx, rectPts(44, 28, 16, 22), rng, PAL.orangeDark, 4, 1, 0.35);
+  shape(ctx, ellipsePts(54, 16, 10, 6, 10), rng, { fill: PAL.yellowHi, lw: 2.2, sketch: false });
+  shape(ctx, ellipsePts(58, 12, 4, 3, 8), rng, { fill: '#fffdf7', stroke: 'none' });
+  eye(ctx, rng, 30, 60, 4.4, 0.5, -0.2, 0.5);
+  eye(ctx, rng, 46, 60, 4.4, 0.5, -0.2, 0.5);
+  line(ctx, [{ x: 22, y: 70 }, { x: 14, y: 78 }], rng, 2.4, PAL.yellow);
+  line(ctx, [{ x: 78, y: 68 }, { x: 88, y: 78 }], rng, 2.4, PAL.yellow);
+};
+
+const drawSticky: Drawer = (ctx, rng) => {
+  ground(ctx, rng, 50, 90, 42);
+  brickBlock(ctx, rng, 14, 36, 64, 46, 8, { front: PAL.red, top: PAL.redTop, side: PAL.redSide }, 3);
+  mortar(ctx, rng, 14, 36, 64, 46, 2);
+  const drip = (x: number, y: number) => {
+    shape(ctx, ellipsePts(x, y, 8, 12, 12), rng, { fill: PAL.yellow, lw: 2.2, sketch: false });
+    shape(ctx, ellipsePts(x, y + 10, 5, 5, 8), rng, { fill: PAL.yellowHi, lw: 1.8, sketch: false });
+  };
+  drip(22, 70);
+  drip(74, 66);
+  shape(ctx, ellipsePts(50, 84, 28, 10, 14), rng, { fill: PAL.yellow, lw: 2.2, sketch: false });
+  eye(ctx, rng, 38, 54, 6, -0.2, 0, 0.45);
+  eye(ctx, rng, 58, 54, 6, -0.2, 0, 0.45);
+};
+
+const drawTwin: Drawer = (ctx, rng) => {
+  ground(ctx, rng, 50, 90, 42);
+  brickBlock(ctx, rng, 8, 56, 78, 28, 7, { front: PAL.blue, top: PAL.blueTop, side: PAL.blueSide }, 4);
+  const barrel = (x: number) => {
+    shape(ctx, rectPts(x, 30, 22, 16, 3), rng, { fill: PAL.gray, lw: 2.6 });
+    shape(ctx, rectPts(x + 16, 27, 8, 22, 2), rng, { fill: PAL.grayDark, lw: 2.4 });
+    shape(ctx, ellipsePts(x + 24, 38, 3, 6, 8), rng, { fill: INK, lw: 1.6, sketch: false });
+  };
+  barrel(18);
+  barrel(52);
+  eye(ctx, rng, 36, 68, 4.2, 0.4, 0, 0.5);
+  eye(ctx, rng, 62, 68, 4.2, 0.4, 0, 0.5);
+  shape(ctx, ellipsePts(28, 24, 4, 4, 8), rng, { fill: PAL.yellow, lw: 1.8, sketch: false });
+  shape(ctx, ellipsePts(70, 22, 4, 4, 8), rng, { fill: PAL.yellow, lw: 1.8, sketch: false });
+};
+
+const drawWisp: Drawer = (ctx, rng) => {
+  ground(ctx, rng, 50, 92, 28);
+  const body: Pt[] = [];
+  for (let i = 0; i <= 14; i++) {
+    const a = Math.PI + (i / 14) * Math.PI;
+    const wob = 1 + (i % 3) * 0.04;
+    body.push({ x: 50 + Math.cos(a) * 28 * wob, y: 58 + Math.sin(a) * 26 });
+  }
+  body.push({ x: 78, y: 78 }, { x: 70, y: 88 }, { x: 60, y: 76 }, { x: 50, y: 90 }, { x: 40, y: 76 }, { x: 30, y: 86 }, { x: 22, y: 74 });
+  shape(ctx, body, rng, { fill: PAL.mist, lw: 3.2 });
+  hatch(ctx, ellipsePts(58, 62, 16, 14, 12), rng, PAL.mistDark, 4, 1, 0.35);
+  eye(ctx, rng, 40, 52, 7, -0.3, 0, 0.45);
+  eye(ctx, rng, 60, 52, 7, -0.3, 0, 0.45);
+  shape(ctx, ellipsePts(50, 66, 6, 4, 8), rng, { fill: '#fffdf7', stroke: 'none' });
+};
+
+const drawSkitter: Drawer = (ctx, rng) => {
+  ground(ctx, rng, 50, 92, 34);
+  for (const [lx, side] of [
+    [28, -1],
+    [40, -1],
+    [62, 1],
+    [74, 1],
+  ] as const) {
+    line(ctx, [{ x: lx, y: 62 }, { x: lx + side * 14, y: 74 }, { x: lx + side * 18, y: 88 }], rng, 2.8, INK);
+  }
+  const body = ellipsePts(50, 58, 30, 16, 18);
+  shape(ctx, body, rng, { fill: PAL.nightBug, lw: 3.2 });
+  hatch(ctx, ellipsePts(56, 64, 18, 8, 10), rng, '#3d4d88', 4, 1, 0.4);
+  shape(ctx, ellipsePts(34, 52, 12, 10, 12), rng, { fill: '#8ea0e0', lw: 2.6 });
+  eye(ctx, rng, 30, 50, 5.2, -0.6, 0, 0.55);
+  eye(ctx, rng, 42, 48, 4.2, -0.4, 0, 0.5);
+  line(ctx, [{ x: 18, y: 50 }, { x: 8, y: 44 }], rng, 2.2);
+  line(ctx, [{ x: 18, y: 56 }, { x: 6, y: 58 }], rng, 2.2);
+};
+
+const drawMoth: Drawer = (ctx, rng) => {
+  const wing = (side: number) => {
+    const pts: Pt[] = [
+      { x: 50, y: 48 },
+      { x: 50 + side * 18, y: 28 },
+      { x: 50 + side * 42, y: 36 },
+      { x: 50 + side * 36, y: 58 },
+      { x: 50 + side * 16, y: 62 },
+    ];
+    shape(ctx, pts, rng, { fill: PAL.wing, lw: 2.8, sketch: false, step: 7 });
+    line(ctx, [{ x: 50 + side * 8, y: 46 }, { x: 50 + side * 30, y: 42 }], rng, 1.8, PAL.wingDeep);
+  };
+  wing(-1);
+  wing(1);
+  const shell = ellipsePts(50, 54, 18, 22, 18);
+  shape(ctx, shell, rng, { fill: PAL.purple, lw: 3.2 });
+  hatch(ctx, ellipsePts(50, 62, 14, 10, 12), rng, PAL.purpleDark, 4, 1, 0.4);
+  line(ctx, [{ x: 50, y: 38 }, { x: 50, y: 70 }], rng, 2, INK);
+  shape(ctx, ellipsePts(44, 46, 6, 3, 8), rng, { fill: PAL.purpleHi, stroke: 'none' });
+  eye(ctx, rng, 44, 50, 4.2, -0.2, 0, 0.5);
+  eye(ctx, rng, 56, 50, 4.2, 0.2, 0, 0.5);
+  line(ctx, [{ x: 42, y: 30 }, { x: 36, y: 16 }], rng, 2);
+  line(ctx, [{ x: 58, y: 30 }, { x: 64, y: 16 }], rng, 2);
+  shape(ctx, ellipsePts(36, 14, 3, 3, 6), rng, { fill: PAL.yellow, lw: 1.4, sketch: false });
+  shape(ctx, ellipsePts(64, 14, 3, 3, 6), rng, { fill: PAL.yellow, lw: 1.4, sketch: false });
+};
+
+const drawMissile: Drawer = (ctx, rng) => {
+  shape(ctx, ellipsePts(28, 62, 10, 16, 10), rng, { fill: '#ffb15a', stroke: 'none' });
+  shape(ctx, ellipsePts(24, 70, 6, 8, 8), rng, { fill: '#fff3a0', stroke: 'none' });
+  const body: Pt[] = [
+    { x: 46, y: 18 },
+    { x: 62, y: 34 },
+    { x: 58, y: 78 },
+    { x: 42, y: 78 },
+    { x: 38, y: 34 },
+  ];
+  shape(ctx, body, rng, { fill: PAL.orange, lw: 3 });
+  shape(ctx, ellipsePts(50, 30, 8, 10, 10), rng, { fill: PAL.yellowHi, lw: 2, sketch: false });
+  const fin = (side: number) => {
+    shape(
+      ctx,
+      [
+        { x: 50, y: 58 },
+        { x: 50 + side * 22, y: 78 },
+        { x: 50 + side * 6, y: 74 },
+      ],
+      rng,
+      { fill: PAL.red, lw: 2.2, sketch: false, step: 6 },
+    );
+  };
+  fin(-1);
+  fin(1);
+};
+
 const DRAWERS: Record<SpriteName, Drawer> = {
   wall0: drawWall(0),
   wall1: drawWall(1),
@@ -637,6 +792,13 @@ const DRAWERS: Record<SpriteName, Drawer> = {
   pogoB: drawPogo(true),
   crabWalk: drawCrab(false),
   crabChomp: drawCrab(true),
+  missiler: drawMissiler,
+  sticky: drawSticky,
+  twin: drawTwin,
+  wisp: drawWisp,
+  skitter: drawSkitter,
+  moth: drawMoth,
+  missile: drawMissile,
   brickIcon: drawBrickIcon,
   heart: drawHeart,
   heartEmpty: drawHeartEmpty,

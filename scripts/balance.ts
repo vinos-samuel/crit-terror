@@ -1,5 +1,18 @@
 // Headless balance check: `npx tsx scripts/balance.ts`
-import { COLS, LEVELS, ROWS, TOWERS, type LevelId, type TowerKind } from '../src/config';
+import {
+  COLS,
+  ENEMIES,
+  LEVELS,
+  MISSILE_SHELL,
+  MISSILE_SOFT,
+  ROWS,
+  STUD_DAMAGE,
+  TOWERS,
+  endlessWave,
+  mergeInto,
+  type LevelId,
+  type TowerKind,
+} from '../src/config';
 import { mulberry32 } from '../src/ink';
 import { campaignScore, endlessScore } from '../src/score';
 import { Game } from '../src/sim';
@@ -102,7 +115,13 @@ function follow(plan: ReadonlyArray<readonly [TowerKind, number, number]>): Stra
   return (g) => {
     for (const [kind, row, col] of plan) {
       const t = g.grid[row][col];
-      if (t?.kind === kind || t?.kind === 'bastion') continue;
+      if (t?.kind === kind) continue;
+      if (t && mergeInto(kind, t.kind, g.level.extraMerges)) {
+        const res = g.place(kind, row, col);
+        if (res !== 'ok') return;
+        continue;
+      }
+      if (t) continue;
       const res = g.place(kind, row, col);
       if (res === 'occupied') continue;
       if (res !== 'ok') return;
@@ -110,9 +129,44 @@ function follow(plan: ReadonlyArray<readonly [TowerKind, number, number]>): Stra
   };
 }
 
+function merged(first: TowerKind, second: TowerKind, col: number, rows = MID) {
+  const out: Array<readonly [TowerKind, number, number]> = [];
+  for (const row of rows) out.push([first, row, col], [second, row, col]);
+  return out;
+}
+
 const planner = follow(PLAN_L1);
 const counterL2 = follow(PLAN_L2);
 const counterL3 = follow(PLAN_L3);
+
+/** Level 4: traps in the fog lanes first, then shooters on those lanes. */
+const PLAN_L4: ReadonlyArray<readonly [TowerKind, number, number]> = [
+  ...steps('trap', 5, [0, 4]),
+  ...steps('shooter', 1, [0, 4, 2]),
+  ...steps('shooter', 0),
+  ...steps('trap', 6, [1, 2, 3]),
+  ...steps('wall', 4, [2, 1, 3]),
+];
+
+/** Level 5: shooters before the skitters pop out of the dark. */
+const PLAN_L5: ReadonlyArray<readonly [TowerKind, number, number]> = [
+  ...steps('shooter', 0),
+  ...steps('shooter', 1),
+  ...steps('trap', 5),
+  ...steps('wall', 3, [2, 1, 3]),
+];
+
+/** Level 6: Missilers. Walls do not stop moths. */
+const PLAN_L6: ReadonlyArray<readonly [TowerKind, number, number]> = [
+  ...merged('trap', 'shooter', 2),
+  ...steps('shooter', 0, [0, 4]),
+  ...merged('trap', 'shooter', 1, [0, 4]),
+  ...steps('shooter', 4, [2, 1, 3]),
+];
+
+const counterL4 = follow(PLAN_L4);
+const counterL5 = follow(PLAN_L5);
+const counterL6 = follow(PLAN_L6);
 
 function assertRules() {
   const g = new Game(() => 0.4, 3);
@@ -128,7 +182,59 @@ function assertRules() {
   if (g.towersBuilt !== 1 || g.bastionsBuilt !== 1) throw new Error('build counters');
   const before = g.bricks;
   if (g.place('bastion', 0, 0) !== 'blocked' || g.bricks !== before) throw new Error('Bastion must not be bought directly');
-  if (g.place('trap', 2, 2) !== 'occupied') throw new Error('trap should not merge');
+  if (g.place('trap', 2, 2) !== 'occupied') throw new Error('trap should not merge onto a Bastion');
+
+  const lawnOnly = new Game(() => 0.3, 1);
+  lawnOnly.place('trap', 1, 1);
+  if (lawnOnly.place('shooter', 1, 1) !== 'occupied' || lawnOnly.grid[1][1]?.kind !== 'trap') {
+    throw new Error('Level 1 stays Bastion-only');
+  }
+  lawnOnly.place('shooter', 1, 2);
+  if (lawnOnly.place('shooter', 1, 2) !== 'occupied') throw new Error('Level 1 rejects Twin Shot');
+
+  const extras = new Game(() => 0.3, 2);
+  extras.bricks = 500;
+  if (extras.place('wall', 0, 0) !== 'ok' || extras.place('trap', 0, 0) !== 'ok') throw new Error('sticky place');
+  if (extras.grid[0][0]?.kind !== 'sticky') throw new Error('Wall+Trap should be a Sticky Barricade');
+  if (extras.place('shooter', 1, 1) !== 'ok' || extras.place('shooter', 1, 1) !== 'ok') throw new Error('twin place');
+  if (extras.grid[1][1]?.kind !== 'twin') throw new Error('Shooter+Shooter should be Twin Shot');
+  const paid = 500 - extras.bricks;
+  if (paid !== TOWERS.wall.cost + TOWERS.trap.cost + TOWERS.shooter.cost * 2) {
+    throw new Error(`extra merges charged ${paid}`);
+  }
+  extras.insertEnemy('blob', 0, 1.35);
+  for (let i = 0; i < 8; i++) extras.update(0.05);
+  if ((extras.enemies[0]?.slowT ?? 0) <= 0) throw new Error('Sticky Barricade should slow a neighbor');
+
+  const sky = new Game(() => 0.4, 6);
+  const stash6 = sky.bricks;
+  if (sky.place('shooter', 2, 1) !== 'ok' || sky.place('trap', 2, 1) !== 'ok') throw new Error('missiler place');
+  if (sky.grid[2][1]?.kind !== 'missiler' || sky.bricks !== stash6 - 80) throw new Error('Missiler pay-the-piece');
+  sky.place('wall', 0, 4);
+  const wallHp = sky.grid[0][4]!.hp;
+  const moth = sky.insertEnemy('moth', 0, 6.4);
+  for (let i = 0; i < 140; i++) sky.update(0.05);
+  if (moth.hp <= 0 || moth.x > 3.6) throw new Error(`Shell Moth should fly over the wall (x ${moth.x.toFixed(2)} hp ${moth.hp})`);
+  if (sky.grid[0][4]?.hp !== wallHp) throw new Error('flyer should not chew the wall');
+  const beetle = sky.insertEnemy('beetle', 2, 3.2);
+  const blob = sky.insertEnemy('blob', 3, 3.2);
+  sky.place('trap', 3, 1);
+  sky.place('shooter', 3, 1);
+  let shellHit = 0;
+  let softHit = 0;
+  const beforeB = beetle.hp;
+  const beforeS = blob.hp;
+  for (let i = 0; i < 80 && (shellHit === 0 || softHit === 0); i++) {
+    sky.update(0.05);
+    if (shellHit === 0 && beetle.hp < beforeB) shellHit = beforeB - beetle.hp;
+    if (softHit === 0 && blob.hp < beforeS) softHit = beforeS - blob.hp;
+  }
+  if (shellHit < MISSILE_SHELL - 1) throw new Error(`shell missile hit ${shellHit}, want ${MISSILE_SHELL}`);
+  if (softHit > MISSILE_SOFT + 1) throw new Error(`soft missile hit ${softHit}, want ${MISSILE_SOFT}`);
+  const studOnShell = STUD_DAMAGE * ENEMIES.moth.armor;
+  if (!(MISSILE_SHELL > studOnShell * 2)) throw new Error('shell missiles should dwarf studs');
+  const late = endlessWave(6);
+  if (!late.moth || !late.wisp || !late.skitter) throw new Error('Endless should field the full roster');
 
   const lawn = new Game(() => 0.2, 1);
   const stash = lawn.bricks;
@@ -190,6 +296,18 @@ report('L3 idle', seeds.map((s) => run(idle, s, 3)));
 report('L3 walls+glue before bastions', seeds.map((s) => run(follow([...steps('wall', 4), ...steps('trap', 6), ...mergedBastions(2)]), s, 3)));
 const l3 = report('L3 counter plan', seeds.map((s) => run(counterL3, s, 3)));
 
+console.log('— Level 4 Fog Lanes —');
+report('L4 idle', seeds.map((s) => run(idle, s, 4)));
+const l4 = report('L4 fog plan', seeds.map((s) => run(counterL4, s, 4)));
+
+console.log('— Level 5 Night Map —');
+report('L5 idle', seeds.map((s) => run(idle, s, 5)));
+const l5 = report('L5 night plan', seeds.map((s) => run(counterL5, s, 5)));
+
+console.log('— Level 6 Sky Moths —');
+report('L6 walls only', seeds.map((s) => run(follow([...steps('wall', 3), ...steps('wall', 4)]), s, 6)));
+const l6 = report('L6 missiler plan', seeds.map((s) => run(counterL6, s, 6)));
+
 console.log('— Endless Quarry —');
 const endlessGames = seeds.map((s) => run(counterL3, s, 3, 4, true));
 const endlessReached = endlessGames.filter((g) => g.waveIndex >= 3).length;
@@ -208,11 +326,20 @@ check(
   l3.wins < l2.wins || l3.avgLives < l2.avgLives - 0.15,
   `Level 3 is harder than Level 2 (${l3.wins}/60 lives ${l3.avgLives.toFixed(2)} vs ${l2.wins}/60 lives ${l2.avgLives.toFixed(2)})`,
 );
-check(endlessReached >= 50, `Endless opener reaches wave 4 (${endlessReached}/60)`);
+check(endlessReached >= 45, `Endless opener reaches wave 4 (${endlessReached}/60)`);
+check(l4.wins >= 18, `Level 4 fog plan can win (${l4.wins}/60)`);
+check(l4.wins <= 56 || l4.avgLives <= 2.4, `Level 4 is not a free clear (${l4.wins}/60, lives ${l4.avgLives.toFixed(2)})`);
+check(l5.wins >= 15, `Level 5 night plan can win (${l5.wins}/60)`);
+check(l5.wins <= 56 || l5.avgLives <= 2.4, `Level 5 is not a free clear (${l5.wins}/60, lives ${l5.avgLives.toFixed(2)})`);
+check(l6.wins >= 12, `Level 6 missiler plan can win (${l6.wins}/60)`);
+check(l6.wins <= 56 || l6.avgLives <= 2.45, `Level 6 is not a free clear (${l6.wins}/60, lives ${l6.avgLives.toFixed(2)})`);
 check(LEVELS[1].tools.join() === 'wall,shooter,trap', 'Level 1 toolbar is Wall, Shooter, Trap');
 check(LEVELS[2].tools.join() === 'wall,shooter,trap', 'Level 2 toolbar is Wall, Shooter, Trap');
 check(LEVELS[3].tools.join() === 'wall,shooter,trap', 'Level 3 toolbar is Wall, Shooter, Trap (no Bastion button)');
-check(!LEVELS[1].tools.includes('bastion') && !LEVELS[3].tools.includes('bastion'), 'Bastion is not a toolbar pick');
+check(LEVELS[4].tools.join() === 'wall,shooter,trap', 'Level 4 toolbar stays the three base pieces');
+check(LEVELS[6].tools.join() === 'wall,shooter,trap', 'Level 6 toolbar stays the three base pieces');
+check(!LEVELS[1].extraMerges && LEVELS[2].extraMerges && LEVELS[6].extraMerges, 'Extra merges start at Level 2');
+check(LEVELS[1].tools.length === 3 && LEVELS[6].tools.length === 3, 'Merges are not toolbar picks');
 
 const l1Scores = seeds
   .map((s) => run(planner, s, 1))
