@@ -3,6 +3,8 @@ import {
   CRITTER_ORDER,
   LEVEL_IDS,
   REVEAL_ON_CLEAR,
+  carryBonus,
+  nextLevelId,
   type EnemyKind,
   type LevelId,
 } from './config';
@@ -16,7 +18,7 @@ import {
  *   score       = style + wavesCleared * 200
  *
  * `towersBuilt` counts pieces snapped onto empty squares.
- * `bastionsBuilt` counts every merge (Bastion, Missiler, Sticky Barricade, Twin Shot).
+ * `bastionsBuilt` counts every merge (Bastion, Missiler, Sticky Barricade, Twin Shot, Spike Wall).
  * The dropped piece is not a second tower. The thrift penalty is the same for each merge.
  * Stars use `style` so a longer level does not get free stars just for having more waves:
  *   3 stars at style >= 1880, 2 stars at style >= 950, otherwise 1 star for the win.
@@ -71,6 +73,11 @@ export interface Records {
   unlockedLevel: LevelId;
   /** Critters revealed on the title gallery. Endless still spawns the full roster. */
   critters: EnemyKind[];
+  /**
+   * Best leftover-brick bonus waiting on a campaign level (the level that receives it).
+   * Level 1 is never a key. Endless is not stored here.
+   */
+  carry?: Partial<Record<LevelId, number>>;
 }
 
 export interface RunOutcome {
@@ -120,7 +127,20 @@ export function endlessScore(input: ScoreInput): number {
 }
 
 function emptyRecords(): Records {
-  return { levels: {}, unlockedLevel: 1, critters: [...BASE_CRITTERS] };
+  return { levels: {}, unlockedLevel: 1, critters: [...BASE_CRITTERS], carry: {} };
+}
+
+function readCarry(raw: unknown): Partial<Record<LevelId, number>> {
+  if (!raw || typeof raw !== 'object') return {};
+  const src = raw as Partial<Record<LevelId, number>>;
+  const carry: Partial<Record<LevelId, number>> = {};
+  for (const id of LEVEL_IDS) {
+    if (id === 1) continue;
+    const n = src[id];
+    if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) continue;
+    carry[id] = carryBonus(n);
+  }
+  return carry;
 }
 
 export function isLevelUnlocked(records: Records, id: LevelId) {
@@ -176,7 +196,13 @@ export function loadRecords(): Records {
     }
     const critters = CRITTER_ORDER.filter((k) => Array.isArray(data.critters) && data.critters.includes(k));
     const unlockedLevel = LEVEL_IDS.includes(data.unlockedLevel as LevelId) ? (data.unlockedLevel as LevelId) : 1;
-    return applyUnlocks({ levels, endless, unlockedLevel, critters: critters.length ? critters : [...BASE_CRITTERS] }).records;
+    return applyUnlocks({
+      levels,
+      endless,
+      unlockedLevel,
+      critters: critters.length ? critters : [...BASE_CRITTERS],
+      carry: readCarry(data.carry),
+    }).records;
   } catch {
     return emptyRecords();
   }
@@ -222,4 +248,24 @@ export function recordEndless(
   const next: Records = { ...records, endless: best };
   if (newWave || newScore) saveRecords(next);
   return { records: next, best, newWave, newScore };
+}
+
+/**
+ * Remember leftover bricks for the next campaign level. Keeps the best bonus, already capped.
+ * Clearing Level 6 does nothing — Endless stays on its own stash.
+ */
+export function bankCarry(
+  records: Records,
+  cleared: LevelId,
+  bricksLeft: number,
+): { records: Records; into: LevelId | null; bricks: number } {
+  const into = nextLevelId(cleared);
+  if (!into) return { records, into: null, bricks: 0 };
+  const bonus = carryBonus(bricksLeft);
+  const prev = records.carry?.[into] ?? 0;
+  const bricks = Math.max(prev, bonus);
+  if (bricks === prev) return { records, into, bricks };
+  const next: Records = { ...records, carry: { ...records.carry, [into]: bricks } };
+  saveRecords(next);
+  return { records: next, into, bricks };
 }

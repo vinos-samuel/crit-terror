@@ -26,15 +26,17 @@ The toolbar is always **Wall, Shooter, Trap**. Nothing else is a button.
 | Shooter | Trap | **Missiler** (or the other way around) | the piece you dropped | Level 2+ |
 | Wall | Trap | **Sticky Barricade** (or the other way around) | the piece you dropped | Level 2+ |
 | Shooter | Shooter | **Twin Shot** | the second Shooter (50) | Level 2+ |
+| Wall | Wall | **Spike Wall** | the second Wall (40) | Level 2+ |
 
-A merged square cannot be merged again. Level 1 can still make a Bastion. Missiler, Sticky Barricade, and Twin Shot wait until Level 2.
+A merged square cannot be merged again. Level 1 can still make a Bastion. Missiler, Sticky Barricade, Twin Shot, and Spike Wall wait until Level 2.
 
 - **Bastion** — blocks and fires studs. Comic cue: **MERGE! / BASTION!**
 - **Missiler** — fires missiles. Shells (Armored Beetle, Chomp Crab, Shell Moth) take a big **CRACK!** Soft critters still get hit, with a smaller puff. Comic cue: **MISSILE! / LOCK ON!** Level 6's open hint teaches it, because that is when shells are the whole wave.
 - **Sticky Barricade** — blocks, and critters in the next squares (and the lanes beside it) get glue-slow. Beetles that ignore glue still ignore it. Comic cue: **STICKY! / SPLAT!**
 - **Twin Shot** — fires two studs per volley. Comic cue: **TWIN! / DOUBLE!**
+- **Spike Wall** — a double wall with nails facing the rift. Ground critters stop and chew it (rollers that hop a plain Wall do not hop this). Flying Shell Moths snag on it instead of sailing past, and anything chewing it takes a light poke (4 damage per second). That poke is not how you crack a shell — Missiler still is. Put spikes out toward the rift, in front of your shooters, or the moths stop behind the guns. Comic cue: **SPIKES! / SNAG!** A stuck moth also wears a **SNAG!** tag, and the first poke says **STAB!**
 
-Building a Bastion from scratch is still 40 + 50 = **90**. A Missiler from scratch is 30 + 50 = **80**. You are never charged an extra fee on top of the piece you drop.
+Building a Bastion from scratch is still 40 + 50 = **90**. A Missiler from scratch is 30 + 50 = **80**. A Spike Wall from scratch is 40 + 40 = **80**. You are never charged an extra fee on top of the piece you drop.
 
 ### Level 1 — Sunny Lawn
 
@@ -66,7 +68,7 @@ They are also tougher than in Level 1, so they actually live long enough to use 
 
 Starting stash: **150** bricks.
 
-Levels 1 and 2 use the Bastion merge if you find it. From Level 2 the other three merges work the same way, with no new toolbar buttons. Level 1's waves, stash, and toolbar are unchanged, and three opening Shooters still cover wave 1 better than one Bastion.
+Levels 1 and 2 use the Bastion merge if you find it. From Level 2 the other merges work the same way, with no new toolbar buttons. Level 1's waves, stash, and toolbar are unchanged, and three opening Shooters still cover wave 1 better than one Bastion.
 
 ### Level 3 — Quarry Dusk
 
@@ -80,7 +82,7 @@ The toolbar stays **Wall, Shooter, and Trap**. There is no Bastion button. A one
 - Drop a Wall (40) onto a Shooter → pay **40**. The square becomes a Bastion.
 - Building one from scratch is 40 + 50 = **90** bricks. You are not charged an old standalone Bastion price on top.
 - The new Bastion has **340** HP, blocks the lane, and fires studs. Rollers that hop plain walls stop and chew a Bastion. Pogos still spring over it.
-- A merged square cannot be merged again. Level 3's open hint is the Bastion. Missiler, Sticky Barricade, and Twin Shot are already available if you find them.
+- A merged square cannot be merged again. Level 3's open hint is the Bastion. Missiler, Sticky Barricade, Twin Shot, and Spike Wall are already available if you find them.
 
 270 bricks is three from-scratch Bastions, matching the old opener of three Bastions.
 
@@ -93,6 +95,7 @@ The toolbar stays **Wall, Shooter, and Trap**. There is no Bastion button. A one
 | Missiler | 80 total | Not a button. Trap + Shooter. Missiles crack shells. |
 | Sticky Barricade | 70 total | Not a button. Wall + Trap. Blocks and slows neighbors. |
 | Twin Shot | 100 total | Not a button. Shooter + Shooter. Two studs. |
+| Spike Wall | 80 total | Not a button. Wall + Wall. Stops flyers and pokes whoever chews it. |
 
 Two new critters, plus the Level 2 powers on the original three:
 
@@ -113,7 +116,7 @@ A dark lawn. The **far half** is night, and critters are silhouettes until they 
 
 ### Level 6 — Sky Moths
 
-Only **Shell Moths**. They fly over every tower, including Walls, Bastions, and Sticky Barricades. Glue does not touch them. Studs tickle the shell. A Missiler (Shooter on a Trap) cracks it — the open hint says so, and a **SHELL** tag plus **CRACK!** makes the weakness obvious. Walls alone cannot win this level. Starting stash: **200** bricks. Five waves.
+Only **Shell Moths**. They fly over plain Walls, Bastions, Sticky Barricades, and glue. A **Spike Wall** (Wall on a Wall, toward the rift) snags them mid-lane. Studs still only tickle the shell. A Missiler (Shooter on a Trap) cracks it — the open hint names both tools, a **SHELL** tag plus **CRACK!** shows the missile weakness, and a stuck moth wears **SNAG!**. Moths on this level have **100** HP (was 120), move at **0.70** (was 0.82), and take **38%** of stud damage (was 32%). Two missiles (54 each) finish one. A pile of moths still chews a Spike Wall down before the poke (4 per second) kills them, so the wall is the stop and the Missiler is the crack. Starting stash: **200** bricks, plus any carry from Level 5. Five waves.
 
 ### Unlocks
 
@@ -150,7 +153,7 @@ style       = lives left × 500 + brickPoints + thrift
 score       = style + waves cleared × 200
 ```
 
-`towers built` counts pieces placed on empty squares. `bastions built` counts **every** merge (Bastion, Missiler, Sticky Barricade, Twin Shot), not a second tower. The formula is unchanged: each merge pays the same thrift penalty the Bastion used to. Stars use `style`, so a longer level does not get a free star:
+`towers built` counts pieces placed on empty squares. `bastions built` counts **every** merge (Bastion, Missiler, Sticky Barricade, Twin Shot, Spike Wall), not a second tower. The formula is unchanged: each merge pays the same thrift penalty the Bastion used to. Stars use `style`, so a longer level does not get a free star:
 
 - **3 stars** when style is at least 1880
 - **2 stars** when style is at least 950
@@ -168,6 +171,21 @@ score = waves cleared × 500 + lives × 150 + min(bricks, 200)
 ```
 
 The best wave and the best score are kept separately on this device.
+
+### Bricks carried between levels
+
+Clearing a campaign level with bricks left helps the **next** level's opener. The bonus is saved on this device in the same `localStorage` record as stars and unlocks.
+
+```
+carry = min(60, bricks left)
+next level starts with its normal stash + carry
+```
+
+- The cap is **60** bricks: one Shooter (50), or a Wall (40) plus change. It cannot fund a from-scratch Bastion (90) or Missiler (80) by itself, so Levels 2–6 keep their own openers.
+- Only the best leftover for each next level is kept. A later clear with fewer bricks does not lower it.
+- Level 1 has nothing to carry in. Beating Level 6 does not feed Endless.
+- Endless always starts at **280** and never reads this bonus.
+- Retrying a level, or coming back later, still uses the saved carry. Losing does not wipe it.
 
 ## Run locally
 

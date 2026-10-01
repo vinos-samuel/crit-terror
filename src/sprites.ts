@@ -56,6 +56,9 @@ export type SpriteName =
   | 'missiler'
   | 'sticky'
   | 'twin'
+  | 'spike0'
+  | 'spike1'
+  | 'spike2'
   | 'wisp'
   | 'skitter'
   | 'moth'
@@ -667,6 +670,61 @@ const drawSticky: Drawer = (ctx, rng) => {
   eye(ctx, rng, 58, 54, 6, -0.2, 0, 0.45);
 };
 
+function drawSpikeWall(damage: number): Drawer {
+  return (ctx, rng) => {
+    ground(ctx, rng, 46, 90, 42);
+    const x = 8;
+    const y = 24;
+    const w = 60;
+    const h = 62;
+    brickBlock(ctx, rng, x, y, w, h, 8, { front: PAL.red, top: PAL.redTop, side: PAL.redSide }, 3);
+    mortar(ctx, rng, x, y, w, h, 3);
+    const nail = (ny: number, len: number) => {
+      shape(
+        ctx,
+        [
+          { x: x + w - 2, y: ny - 7 },
+          { x: x + w + len, y: ny },
+          { x: x + w - 2, y: ny + 7 },
+        ],
+        rng,
+        { fill: PAL.slateHi, lw: 2.3, sketch: false },
+      );
+      shape(ctx, ellipsePts(x + w + len, ny, 3.4, 3.4, 8), rng, { fill: PAL.yellow, lw: 1.6, sketch: false });
+    };
+    nail(40, 20);
+    nail(56, 24);
+    nail(72, 18);
+    if (damage >= 1) {
+      crack(ctx, rng, 18, 30, 28);
+      crack(ctx, rng, 52, 48, 22);
+    }
+    if (damage >= 2) {
+      crack(ctx, rng, 34, 28, 40);
+      crack(ctx, rng, 16, 70, 18);
+    }
+    const worried = damage >= 2;
+    eye(ctx, rng, 30, 52, 7, worried ? 0.2 : 0.7, worried ? -0.4 : 0, worried ? 0.35 : 0.48);
+    eye(ctx, rng, 50, 52, 7, worried ? 0.2 : 0.7, worried ? -0.4 : 0, worried ? 0.35 : 0.48);
+    if (worried) {
+      line(ctx, [{ x: 22, y: 40 }, { x: 36, y: 43 }], rng, 2.2);
+      line(ctx, [{ x: 58, y: 40 }, { x: 44, y: 43 }], rng, 2.2);
+    } else {
+      line(
+        ctx,
+        [
+          { x: 28, y: 64 },
+          { x: 36, y: 68 },
+          { x: 44, y: 64 },
+          { x: 52, y: 68 },
+        ],
+        rng,
+        2.2,
+      );
+    }
+  };
+}
+
 const drawTwin: Drawer = (ctx, rng) => {
   ground(ctx, rng, 50, 90, 42);
   brickBlock(ctx, rng, 8, 56, 78, 28, 7, { front: PAL.blue, top: PAL.blueTop, side: PAL.blueSide }, 4);
@@ -795,6 +853,9 @@ const DRAWERS: Record<SpriteName, Drawer> = {
   missiler: drawMissiler,
   sticky: drawSticky,
   twin: drawTwin,
+  spike0: drawSpikeWall(0),
+  spike1: drawSpikeWall(1),
+  spike2: drawSpikeWall(2),
   wisp: drawWisp,
   skitter: drawSkitter,
   moth: drawMoth,

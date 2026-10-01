@@ -6,6 +6,7 @@ import { mulberry32 } from './ink';
 import { cellAt, hit } from './layout';
 import { overlayExtra, overlayLayout, Renderer, titleLayout, type Effect, type ViewState } from './render';
 import {
+  bankCarry,
   campaignScore,
   endlessScore,
   isLevelUnlocked,
@@ -41,7 +42,8 @@ const view: ViewState = {
 function newGame(level?: LevelId, endless?: boolean) {
   const end = endless ?? (level === undefined && view.game.endless);
   const id: LevelId = end ? 3 : (level ?? view.game.levelId);
-  view.game = new Game(Math.random, id, end);
+  const carry = end ? 0 : (view.records.carry?.[id] ?? 0);
+  view.game = new Game(Math.random, id, end, carry);
   view.paused = false;
   view.selected = null;
   view.effects = [];
@@ -53,6 +55,7 @@ function newGame(level?: LevelId, endless?: boolean) {
   view.reveal = null;
   view.screen = 'play';
   renderer.setTheme(view.game.theme);
+  if (view.game.carried > 0) toast(`+${view.game.carried} bricks from the last level!`, 2.4);
 }
 
 function toast(text: string, dur = 1.6) {
@@ -206,6 +209,7 @@ function handleEvents(events: GameEvent[]) {
           missiler: ['#ffb15a', '#fff3a6'],
           sticky: ['#f8d55a', '#fff6c2'],
           twin: ['#a3c2f5', '#fff3a6'],
+          spike: ['#f4a19a', '#d5dde6'],
         };
         addEffect({
           kind: 'puff',
@@ -282,6 +286,18 @@ function handleEvents(events: GameEvent[]) {
           size: size * 0.22,
           rot: -0.1,
           color: '#f8d55a',
+        });
+        break;
+      case 'stab':
+        addEffect({
+          kind: 'word',
+          text: 'STAB!',
+          x: L.lawn.x + e.x * L.cellW,
+          y: laneY(e.row) - size * 0.95,
+          dur: 0.55,
+          size: size * 0.22,
+          rot: -0.12,
+          color: '#f4a19a',
         });
         break;
       case 'waveStart':
@@ -370,7 +386,7 @@ function commitOutcome() {
     bastionsBuilt: g.bastionsBuilt,
   });
   const rec = recordLevel(view.records, g.levelId, scored.score, scored.stars);
-  view.records = rec.records;
+  view.records = bankCarry(rec.records, g.levelId, g.bricks).records;
   if (rec.revealed) view.reveal = rec.revealed;
   view.outcome = {
     score: scored.score,

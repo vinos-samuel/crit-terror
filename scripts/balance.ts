@@ -1,20 +1,24 @@
 // Headless balance check: `npx tsx scripts/balance.ts`
 import {
+  CARRY_CAP,
   COLS,
   ENEMIES,
+  ENDLESS_START_BRICKS,
   LEVELS,
   MISSILE_SHELL,
   MISSILE_SOFT,
   ROWS,
+  SPIKE_DPS,
   STUD_DAMAGE,
   TOWERS,
+  carryBonus,
   endlessWave,
   mergeInto,
   type LevelId,
   type TowerKind,
 } from '../src/config';
 import { mulberry32 } from '../src/ink';
-import { campaignScore, endlessScore } from '../src/score';
+import { bankCarry, campaignScore, endlessScore, loadRecords } from '../src/score';
 import { Game } from '../src/sim';
 
 type Strategy = (g: Game) => void;
@@ -113,17 +117,25 @@ const PLAN_L3: ReadonlyArray<readonly [TowerKind, number, number]> = [
 
 function follow(plan: ReadonlyArray<readonly [TowerKind, number, number]>): Strategy {
   return (g) => {
+    // A repeated step on the same square is a merge (Wall+Wall, Shooter+Shooter).
+    // The first step only fills an empty square, so one Shooter never turns into a Twin by accident.
+    const seen = new Map<string, number>();
     for (const [kind, row, col] of plan) {
+      const key = `${row}:${col}`;
+      const nth = seen.get(key) ?? 0;
+      seen.set(key, nth + 1);
       const t = g.grid[row][col];
-      if (t?.kind === kind) continue;
-      if (t && mergeInto(kind, t.kind, g.level.extraMerges)) {
+      if (!t) {
+        if (nth > 0) continue;
         const res = g.place(kind, row, col);
+        if (res === 'occupied') continue;
         if (res !== 'ok') return;
         continue;
       }
-      if (t) continue;
+      if (nth === 0) continue;
+      const into = mergeInto(kind, t.kind, g.level.extraMerges);
+      if (!into || t.kind === into) continue;
       const res = g.place(kind, row, col);
-      if (res === 'occupied') continue;
       if (res !== 'ok') return;
     }
   };
@@ -164,9 +176,18 @@ const PLAN_L6: ReadonlyArray<readonly [TowerKind, number, number]> = [
   ...steps('shooter', 4, [2, 1, 3]),
 ];
 
+/** Same Missilers, then Spike Walls out toward the rift so the overflow has somewhere to snag. */
+const PLAN_L6_SPIKE: ReadonlyArray<readonly [TowerKind, number, number]> = [
+  ...merged('trap', 'shooter', 2),
+  ...merged('wall', 'wall', 6, [2, 1, 3]),
+  ...steps('shooter', 0, [0, 4]),
+  ...merged('wall', 'wall', 6, [0, 4]),
+];
+
 const counterL4 = follow(PLAN_L4);
 const counterL5 = follow(PLAN_L5);
 const counterL6 = follow(PLAN_L6);
+const counterL6Spike = follow(PLAN_L6_SPIKE);
 
 function assertRules() {
   const g = new Game(() => 0.4, 3);
@@ -191,6 +212,10 @@ function assertRules() {
   }
   lawnOnly.place('shooter', 1, 2);
   if (lawnOnly.place('shooter', 1, 2) !== 'occupied') throw new Error('Level 1 rejects Twin Shot');
+  lawnOnly.place('wall', 2, 2);
+  if (lawnOnly.place('wall', 2, 2) !== 'occupied' || lawnOnly.grid[2][2]?.kind !== 'wall') {
+    throw new Error('Level 1 rejects Spike Wall');
+  }
 
   const extras = new Game(() => 0.3, 2);
   extras.bricks = 500;
@@ -231,6 +256,65 @@ function assertRules() {
   }
   if (shellHit < MISSILE_SHELL - 1) throw new Error(`shell missile hit ${shellHit}, want ${MISSILE_SHELL}`);
   if (softHit > MISSILE_SOFT + 1) throw new Error(`soft missile hit ${softHit}, want ${MISSILE_SOFT}`);
+
+  const snag = new Game(() => 0.4, 6);
+  if (snag.place('wall', 4, 4) !== 'ok' || snag.place('wall', 4, 4) !== 'ok') throw new Error('spike place');
+  const spike = snag.grid[4][4];
+  if (spike?.kind !== 'spike' || spike.hp !== TOWERS.spike.hp) throw new Error('Wall+Wall should be a Spike Wall');
+  if (snag.bricks !== LEVELS[6].startBricks - TOWERS.wall.cost * 2) throw new Error('Spike Wall should charge two Walls');
+  const mothSnag = snag.insertEnemy('moth', 4, 6.4);
+  const mothFull = mothSnag.maxHp;
+  for (let i = 0; i < 160; i++) snag.update(0.05);
+  if (mothSnag.x < 4.6 || mothSnag.x > 5.6) throw new Error(`Spike Wall should stop a moth (x ${mothSnag.x.toFixed(2)})`);
+  const poked = mothFull - mothSnag.hp;
+  if (poked < SPIKE_DPS * 3 || poked > SPIKE_DPS * 12) throw new Error(`spike poke ${poked.toFixed(1)} over 8s`);
+  if (mothSnag.hp <= 0) throw new Error('spikes should not delete a moth outright');
+  if ((snag.grid[4][4]?.hp ?? 0) >= TOWERS.spike.hp) throw new Error('snagged moth should chew the Spike Wall');
+
+  if (carryBonus(0) !== 0 || carryBonus(40) !== 40 || carryBonus(500) !== CARRY_CAP) {
+    throw new Error(`carry formula ${carryBonus(0)}/${carryBonus(40)}/${carryBonus(500)}`);
+  }
+  const withCarry = new Game(() => 0.2, 2, false, 90);
+  if (withCarry.carried !== CARRY_CAP || withCarry.bricks !== LEVELS[2].startBricks + CARRY_CAP) {
+    throw new Error(`L2 carry start ${withCarry.bricks} carried ${withCarry.carried}`);
+  }
+  const endlessCarry = new Game(() => 0.2, 3, true, 90);
+  if (endlessCarry.carried !== 0 || endlessCarry.bricks !== ENDLESS_START_BRICKS) {
+    throw new Error('Endless must ignore carry-in');
+  }
+  const mem = new Map<string, string>();
+  const storage = {
+    getItem: (k: string) => mem.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      mem.set(k, v);
+    },
+    removeItem: (k: string) => {
+      mem.delete(k);
+    },
+    clear: () => mem.clear(),
+    key: (i: number) => [...mem.keys()][i] ?? null,
+    get length() {
+      return mem.size;
+    },
+  };
+  Object.assign(globalThis, { localStorage: storage });
+  const banked = bankCarry({ levels: {}, unlockedLevel: 1, critters: ['blob', 'beetle', 'roller'], carry: {} }, 1, 80);
+  if (banked.into !== 2 || banked.bricks !== CARRY_CAP || banked.records.carry?.[2] !== CARRY_CAP) {
+    throw new Error('banking a thrifty Level 1 should cap the Level 2 bonus');
+  }
+  const kept = bankCarry(banked.records, 1, 10);
+  if (kept.bricks !== CARRY_CAP || kept.records !== banked.records) throw new Error('a smaller leftover must not lower the saved carry');
+  const into6 = bankCarry(kept.records, 5, 45);
+  if (into6.into !== 6 || into6.bricks !== 45) throw new Error('Level 5 leftover should carry 45 into Level 6');
+  const noEndless = bankCarry(into6.records, 6, 200);
+  if (noEndless.into !== null || noEndless.bricks !== 0 || noEndless.records.carry?.[6] !== 45) {
+    throw new Error('Level 6 must not write a carry, and must keep the Level 6 bonus');
+  }
+  const loaded = loadRecords();
+  if (loaded.carry?.[2] !== CARRY_CAP || loaded.carry?.[6] !== 45) {
+    throw new Error(`carry did not round-trip (${loaded.carry?.[2]}, ${loaded.carry?.[6]})`);
+  }
+
   const studOnShell = STUD_DAMAGE * ENEMIES.moth.armor;
   if (!(MISSILE_SHELL > studOnShell * 2)) throw new Error('shell missiles should dwarf studs');
   const late = endlessWave(6);
@@ -305,8 +389,9 @@ report('L5 idle', seeds.map((s) => run(idle, s, 5)));
 const l5 = report('L5 night plan', seeds.map((s) => run(counterL5, s, 5)));
 
 console.log('— Level 6 Sky Moths —');
-report('L6 walls only', seeds.map((s) => run(follow([...steps('wall', 3), ...steps('wall', 4)]), s, 6)));
+const l6walls = report('L6 walls only', seeds.map((s) => run(follow([...steps('wall', 3), ...steps('wall', 4)]), s, 6)));
 const l6 = report('L6 missiler plan', seeds.map((s) => run(counterL6, s, 6)));
+const l6spike = report('L6 missiler + spikes', seeds.map((s) => run(counterL6Spike, s, 6)));
 
 console.log('— Endless Quarry —');
 const endlessGames = seeds.map((s) => run(counterL3, s, 3, 4, true));
@@ -331,8 +416,10 @@ check(l4.wins >= 18, `Level 4 fog plan can win (${l4.wins}/60)`);
 check(l4.wins <= 56 || l4.avgLives <= 2.4, `Level 4 is not a free clear (${l4.wins}/60, lives ${l4.avgLives.toFixed(2)})`);
 check(l5.wins >= 15, `Level 5 night plan can win (${l5.wins}/60)`);
 check(l5.wins <= 56 || l5.avgLives <= 2.4, `Level 5 is not a free clear (${l5.wins}/60, lives ${l5.avgLives.toFixed(2)})`);
+check(l6walls.wins === 0, `Level 6 plain walls still cannot stop moths (${l6walls.wins}/60)`);
 check(l6.wins >= 12, `Level 6 missiler plan can win (${l6.wins}/60)`);
 check(l6.wins <= 56 || l6.avgLives <= 2.45, `Level 6 is not a free clear (${l6.wins}/60, lives ${l6.avgLives.toFixed(2)})`);
+check(l6spike.wins >= l6.wins, `Spike Walls do not make the Missiler plan worse (${l6spike.wins}/60 vs ${l6.wins}/60)`);
 check(LEVELS[1].tools.join() === 'wall,shooter,trap', 'Level 1 toolbar is Wall, Shooter, Trap');
 check(LEVELS[2].tools.join() === 'wall,shooter,trap', 'Level 2 toolbar is Wall, Shooter, Trap');
 check(LEVELS[3].tools.join() === 'wall,shooter,trap', 'Level 3 toolbar is Wall, Shooter, Trap (no Bastion button)');

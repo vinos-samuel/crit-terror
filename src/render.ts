@@ -88,6 +88,7 @@ const MERGE_TINT: Record<MergeKind, string> = {
   missiler: 'rgba(244,160,90,0.95)',
   sticky: 'rgba(248,213,90,0.95)',
   twin: 'rgba(163,194,245,0.95)',
+  spike: 'rgba(244,161,154,0.95)',
 };
 
 const LEVEL_COLORS = [GREEN_BTN, PAL.yellow, '#ef8f62', '#b7c9d6', '#6d7ec4', '#f7c6de'];
@@ -520,9 +521,11 @@ export class Renderer {
   }
 
   private drawTowerSprite(kind: TowerKind, cx: number, bottom: number, size: number, frame: number, hpRatio: number, alpha?: number) {
-    let name: SpriteName = kind === 'wall' ? 'wall0' : kind === 'bastion' ? 'bastion0' : kind;
+    let name: SpriteName;
     if (kind === 'wall') name = hpRatio < 0.34 ? 'wall2' : hpRatio < 0.67 ? 'wall1' : 'wall0';
-    if (kind === 'bastion') name = hpRatio < 0.34 ? 'bastion2' : hpRatio < 0.67 ? 'bastion1' : 'bastion0';
+    else if (kind === 'bastion') name = hpRatio < 0.34 ? 'bastion2' : hpRatio < 0.67 ? 'bastion1' : 'bastion0';
+    else if (kind === 'spike') name = hpRatio < 0.34 ? 'spike2' : hpRatio < 0.67 ? 'spike1' : 'spike0';
+    else name = kind;
     const o = alpha === undefined ? {} : { alpha };
     if (kind === 'trap') this.drawSprite(name, cx, bottom + size * 0.06, size * 0.96, frame, o);
     else this.drawSprite(name, cx, bottom, size, frame, o);
@@ -650,7 +653,9 @@ export class Renderer {
       this.drawSprite('skitter', cx, bottom + bob, size * 0.88, frame, { sx, sy, rot, alpha });
     } else if (e.kind === 'moth') {
       const flap = Math.sin(a * 10) * 0.08;
-      lift = size * 0.28 + Math.sin(a * 4) * size * 0.06;
+      const snag = e.eating;
+      lift = (snag ? size * 0.1 : size * 0.28) + Math.sin(a * 4) * size * (snag ? 0.02 : 0.06);
+      if (snag) rot += Math.sin(a * 14) * 0.1;
       bottom = ground - lift;
       this.drawSprite('moth', cx, bottom, size * 1.02, frame, { sx: sx + flap, sy, rot, alpha });
     } else {
@@ -681,6 +686,10 @@ export class Renderer {
     }
     if (e.reviveT > 0) {
       this.comicTag('AGAIN!', cx, bottom - size * 0.95, '#c8ec9f', 22);
+      return;
+    }
+    if (e.kind === 'moth' && e.eating) {
+      this.comicTag('SNAG!', cx, bottom - size * 0.95, '#f4a19a', 18);
       return;
     }
     if (e.kind === 'blob' && powers.blobRevives && !e.revived) {
@@ -932,6 +941,7 @@ export class Renderer {
       missiler: PAL.orange,
       sticky: PAL.yellow,
       twin: PAL.blue,
+      spike: PAL.red,
     };
     g.toolOrder.forEach((kind, i) => {
       const r = L.tools[kind];
@@ -1041,6 +1051,9 @@ export class Renderer {
       if (teachMissile && (v.selected === 'trap' || v.selected === 'shooter')) {
         const other = v.selected === 'trap' ? 'Shooter' : 'Trap';
         return `Place a ${s.label} for ${s.cost}, or drop it on a ${other} to make a Missiler.`;
+      }
+      if (teachMissile && v.selected === 'wall') {
+        return `Place a Wall for ${s.cost}, or stack it toward the rift to snag moths.`;
       }
       return `Tap an empty square to place a ${s.label}. ${s.blurb}.`;
     }
@@ -1187,6 +1200,7 @@ export class Renderer {
     const nextId = nextLevelId(g.levelId);
     const outcome = v.outcome;
     const revealed = outcome?.revealed;
+    const brought = nextId ? (v.records.carry?.[nextId] ?? 0) : 0;
     if (kind === 'pause') {
       sub = 'Take a breather. The critters will wait.';
       sub2 = g.endless
@@ -1194,13 +1208,16 @@ export class Renderer {
         : `Level ${g.levelId} · ${g.level.name}  ·  wave ${Math.min(g.waveIndex + 1, g.totalWaves)} of ${g.totalWaves}`;
     } else if (kind === 'won') {
       sub = nextId ? `Level ${g.levelId} clear. ${g.level.name} is safe!` : `You beat every level of ${GAME_TITLE}!`;
+      const carryNote = nextId && brought > 0 ? ` Carry +${brought} bricks.` : '';
       if (revealed) {
         sub2 = nextId
-          ? `New critter: ${ENEMIES[revealed].label}! Next: Level ${nextId} · ${LEVELS[nextId].name}.`
+          ? `New critter: ${ENEMIES[revealed].label}!${carryNote || ` Next: Level ${nextId}.`}`
           : `New critter: ${ENEMIES[revealed].label}!`;
       } else {
         sub2 = nextId
-          ? `Next up: Level ${nextId} · ${LEVELS[nextId].name}.`
+          ? brought > 0
+            ? `Next: Level ${nextId} · ${LEVELS[nextId].name}.${carryNote}`
+            : `Next up: Level ${nextId} · ${LEVELS[nextId].name}.`
           : `Lives left: ${g.lives}  ·  Bricks saved: ${g.bricks}`;
       }
     } else if (g.endless) {
@@ -1252,7 +1269,7 @@ export class Renderer {
     } else if (kind === 'lost' && (g.levelId === 6)) {
       this.drawSprite('moth', cx - 150, rowY - bob, s, frame);
       this.drawSprite('missiler', cx, rowY + bob, s, frame);
-      this.drawSprite('wall0', cx + 150, rowY + bob, s, frame);
+      this.drawSprite('spike0', cx + 150, rowY + bob, s, frame);
     } else if (kind === 'lost' && g.levelId === 5) {
       this.drawSprite('skitter', cx - 150, rowY + bob, s * 0.9, frame);
       this.drawSprite('shooter', cx, rowY - bob, s, frame);
@@ -1270,7 +1287,7 @@ export class Renderer {
       this.drawSprite('beetleA', cx, rowY - bob, s, frame);
       this.drawRoller(cx + 160, rowY + bob, s * 0.9, frame, v.time * -4);
     } else if (g.levelId === 6) {
-      this.drawSprite('trap', cx - 160, rowY + s * 0.06, s, frame);
+      this.drawSprite('spike0', cx - 160, rowY + bob, s, frame);
       this.drawSprite('missiler', cx, rowY - bob, s, frame);
       this.drawSprite('moth', cx + 160, rowY - bob, s, frame);
     } else if (g.levelId === 3) {
