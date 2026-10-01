@@ -3,6 +3,8 @@ import {
   ENDLESS_START_BRICKS,
   ENEMIES,
   GLUE_LINGER,
+  SPIKE_DPS,
+  carryBonus,
   GLUE_SLOW,
   HOP_DIST,
   HOP_DUR,
@@ -71,6 +73,8 @@ export interface Enemy {
   hopMax: number;
   /** Lane column that already showed the beetle's glue shrug. */
   shrugCol: number;
+  /** True after the first STAB! from the Spike Wall currently holding this critter. */
+  poked: boolean;
 }
 
 export interface Stud {
@@ -92,7 +96,8 @@ export type GameEvent =
   | { type: 'bricks'; amount: number }
   | { type: 'revive'; row: number; x: number }
   | { type: 'hop'; row: number; x: number; kind: EnemyKind }
-  | { type: 'shrug'; row: number; x: number };
+  | { type: 'shrug'; row: number; x: number }
+  | { type: 'stab'; row: number; x: number };
 
 export type Phase = 'ready' | 'wave' | 'intermission' | 'won' | 'lost';
 export type PlaceCheck = 'ok' | 'occupied' | 'bricks' | 'blocked';
@@ -129,22 +134,25 @@ export class Game {
   /** Pieces snapped onto empty squares. A merge does not increment this. */
   towersBuilt = 0;
   /**
-   * Merges (Bastion, Missiler, Sticky Barricade, Twin Shot).
+   * Merges (Bastion, Missiler, Sticky Barricade, Twin Shot, Spike Wall).
    * The dropped piece is counted here, not in `towersBuilt`.
    * Scoring still reads this field — every merge pays the old Bastion thrift penalty.
    */
   bastionsBuilt = 0;
+  /** Campaign carry added on top of this level's stash. Endless is always 0. */
+  readonly carried: number;
   private spawns: Spawn[] = [];
   private waveTime = 0;
   private trickleT = 0;
   private nextId = 1;
   private rng: () => number;
 
-  constructor(rng: () => number = Math.random, levelId: LevelId = 1, endless = false) {
+  constructor(rng: () => number = Math.random, levelId: LevelId = 1, endless = false, carryIn = 0) {
     this.rng = rng;
     this.endless = endless;
     this.levelId = endless ? 3 : levelId;
-    this.bricks = endless ? ENDLESS_START_BRICKS : LEVELS[this.levelId].startBricks;
+    this.carried = endless ? 0 : carryBonus(carryIn);
+    this.bricks = (endless ? ENDLESS_START_BRICKS : LEVELS[this.levelId].startBricks) + this.carried;
     this.grid = Array.from({ length: ROWS }, () => Array<Tower | null>(COLS).fill(null));
   }
 
@@ -369,6 +377,7 @@ export class Game {
       hopT: 0,
       hopMax: 0,
       shrugCol: -1,
+      poked: false,
       ...extra,
     };
     this.enemies.push(enemy);
@@ -451,11 +460,12 @@ export class Game {
   }
 
   private blockerFor(e: Enemy): Tower | null {
-    if (this.flies(e)) return null;
+    const flying = this.flies(e);
     const c0 = Math.floor(e.x - 0.3);
     for (let c = Math.min(COLS - 1, c0 + 1); c >= Math.max(0, c0 - 1); c--) {
       const t = this.grid[e.row][c];
       if (!t || t.kind === 'trap') continue;
+      if (flying && t.kind !== 'spike') continue;
       if (e.x > c + 0.5 && e.x - 0.3 <= c + 0.95) return t;
     }
     return null;
@@ -536,18 +546,38 @@ export class Game {
         const blocker = this.blockerFor(e);
         if (blocker && this.canHop(e, blocker)) {
           this.beginHop(e);
+          e.poked = false;
         } else {
           e.eating = !!blocker;
           if (blocker) {
             blocker.hp -= stats.dps * dt;
             blocker.hitT = 0.12;
+            if (blocker.kind === 'spike') {
+              e.hp -= SPIKE_DPS * dt;
+              e.hitT = Math.max(e.hitT, 0.1);
+              if (!e.poked) {
+                e.poked = true;
+                this.events.push({ type: 'stab', row: e.row, x: e.x });
+              }
+            } else {
+              e.poked = false;
+            }
             if (blocker.hp <= 0) {
               this.grid[blocker.row][blocker.col] = null;
               this.events.push({ type: 'crunch', row: blocker.row, col: blocker.col });
             }
           } else {
+            e.poked = false;
             e.x -= stats.speed * e.rage * (e.slowT > 0 ? GLUE_SLOW : 1) * dt;
           }
+        }
+      }
+
+      if (e.hp <= 0) {
+        if (!this.tryRevive(e)) {
+          this.bricks += stats.reward;
+          this.events.push({ type: 'kill', row: e.row, x: e.x, reward: stats.reward, kind: e.kind });
+          continue;
         }
       }
 
@@ -655,10 +685,12 @@ export function makeShowcase(levelId: 2 | 3 | 4 | 5 | 6): Game {
     }
     g.place('wall', 0, 3);
     g.place('wall', 4, 4);
+    g.place('wall', 4, 4);
     g.place('shooter', 0, 1);
     g.insertEnemy('moth', 2, 6.4, { age: 1.3, hp: 40 });
     g.insertEnemy('moth', 1, 7.5, { age: 0.7 });
     g.insertEnemy('moth', 3, 5.2, { age: 1.8 });
+    g.insertEnemy('moth', 4, 5.15, { eating: true, age: 1.1, hp: 78 });
     g.insertEnemy('moth', 0, 8.1, { age: 0.4 });
     g.studs.push({ id: 9006, row: 2, x: 4.2, missile: true });
     g.studs.push({ id: 9007, row: 1, x: 3.4, missile: true });

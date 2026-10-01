@@ -1,9 +1,9 @@
 export const GAME_TITLE = 'Crit-terror';
 
-export type TowerKind = 'wall' | 'shooter' | 'trap' | 'bastion' | 'missiler' | 'sticky' | 'twin';
+export type TowerKind = 'wall' | 'shooter' | 'trap' | 'bastion' | 'missiler' | 'sticky' | 'twin' | 'spike';
 /** Toolbar pieces. Merges are never buttons. */
 export type ToolKind = 'wall' | 'shooter' | 'trap';
-export type MergeKind = 'bastion' | 'missiler' | 'sticky' | 'twin';
+export type MergeKind = 'bastion' | 'missiler' | 'sticky' | 'twin' | 'spike';
 export type EnemyKind = 'blob' | 'beetle' | 'roller' | 'pogo' | 'crab' | 'wisp' | 'skitter' | 'moth';
 export type LevelId = 1 | 2 | 3 | 4 | 5 | 6;
 export type Theme = 'lawn' | 'quarry' | 'fog' | 'night' | 'sky';
@@ -17,6 +17,22 @@ export const TRICKLE_EVERY = 2.5;
 export const TRICKLE_AMOUNT = 5;
 export const WAVE_BONUS = 50;
 export const INTERMISSION = 12;
+
+/**
+ * Leftover bricks carried into the next campaign level, on top of that level's stash.
+ * `carryBonus` keeps the whole leftover up to this cap so a thrifty clear helps the
+ * opener (one extra Wall or Shooter) without rewriting later budgets.
+ * Endless never reads or writes it.
+ */
+export const CARRY_CAP = 60;
+
+export function carryBonus(bricksLeft: number): number {
+  if (!Number.isFinite(bricksLeft) || bricksLeft <= 0) return 0;
+  return Math.min(CARRY_CAP, Math.floor(bricksLeft));
+}
+
+/** Poke per second while a critter is chewing a Spike Wall. A stop, not a shell crack. */
+export const SPIKE_DPS = 4;
 
 export const SHOOTER_COOLDOWN = 1.1;
 export const STUD_DAMAGE = 20;
@@ -68,11 +84,16 @@ export const TOWERS: Record<TowerKind, TowerStats> = {
   sticky: { label: 'Sticky Barricade', cost: 70, hp: 380, blurb: 'Blocks and gums up neighbors' },
   /** Shooter + Shooter. One volley, two studs. */
   twin: { label: 'Twin Shot', cost: 100, hp: 170, blurb: 'Fires two studs at once' },
+  /**
+   * Wall + Wall. `cost` is 40 + 40. You pay only the second Wall.
+   * Blocks flyers. Spikes poke whoever is chewing it (SPIKE_DPS). Missiles still crack shells.
+   */
+  spike: { label: 'Spike Wall', cost: 80, hp: 480, blurb: 'Stops flyers. Spikes poke' },
 };
 
 /**
  * Dropping `placed` onto `existing`.
- * Bastion works on every level. Missiler, Sticky Barricade, and Twin Shot need `extraMerges` (Level 2+).
+ * Bastion works on every level. Missiler, Sticky Barricade, Twin Shot, and Spike Wall need `extraMerges` (Level 2+).
  * Already-merged squares never merge again.
  */
 export function mergeInto(placed: TowerKind, existing: TowerKind, extraMerges: boolean): MergeKind | null {
@@ -81,6 +102,7 @@ export function mergeInto(placed: TowerKind, existing: TowerKind, extraMerges: b
   if ((placed === 'shooter' && existing === 'trap') || (placed === 'trap' && existing === 'shooter')) return 'missiler';
   if ((placed === 'wall' && existing === 'trap') || (placed === 'trap' && existing === 'wall')) return 'sticky';
   if (placed === 'shooter' && existing === 'shooter') return 'twin';
+  if (placed === 'wall' && existing === 'wall') return 'spike';
   return null;
 }
 
@@ -94,6 +116,7 @@ export const MERGE_CUE: Record<MergeKind, readonly [string, string]> = {
   missiler: ['MISSILE!', 'LOCK ON!'],
   sticky: ['STICKY!', 'SPLAT!'],
   twin: ['TWIN!', 'DOUBLE!'],
+  spike: ['SPIKES!', 'SNAG!'],
 };
 
 /** Level 1 toolbar. Higher levels pick their own set — still only the three base pieces. */
@@ -114,7 +137,7 @@ export interface EnemyStats {
   moveArmor?: number;
   /** Hard shell. Missiles crack it (bonus damage, big CRACK!). Studs do not. */
   shell?: boolean;
-  /** Flies over every tower. Walls, Bastions, and glue do nothing. Shoot it. */
+  /** Flies over every tower except a Spike Wall. Glue does nothing. Shoot it, or snag it. */
   flying?: boolean;
   blurb: string;
 }
@@ -155,7 +178,7 @@ export const ENEMIES: Record<EnemyKind, EnemyStats> = {
     armor: 0.35,
     shell: true,
     flying: true,
-    blurb: 'Flies over walls. Missiles crack the shell.',
+    blurb: 'Flies over plain walls. Spikes snag it. Missiles crack the shell.',
   },
 };
 
@@ -241,7 +264,7 @@ export const WAVES_L5: WaveDef[] = [
   { skitter: 14, beetle: 3, gap: 1.15 },
 ];
 
-/** Flying only. Shell moths ignore every tower. Studs tickle the shell; missiles crack it. */
+/** Flying only. Shell moths ignore every tower except a Spike Wall. Studs tickle the shell; missiles crack it. */
 export const WAVES_L6: WaveDef[] = [
   { moth: 5, gap: 3.1 },
   { moth: 8, gap: 2.2 },
@@ -312,7 +335,7 @@ export interface LevelDef {
   rowStreak: number;
   /** How many of the final waves bunch critters into the middle lanes. 0 keeps level 1 even. */
   hotWaves: number;
-  /** Missiler, Sticky Barricade, and Twin Shot. Off on Level 1 so the lawn stays Bastion-only. */
+  /** Missiler, Sticky Barricade, Twin Shot, and Spike Wall. Off on Level 1 so the lawn stays Bastion-only. */
   extraMerges: boolean;
   /** Wave 1 lane list. Defaults to the middle lanes. */
   openingRows?: readonly number[];
@@ -427,8 +450,8 @@ export const LEVELS: Record<LevelId, LevelDef> = {
     id: 6,
     name: 'Sky Moths',
     tagline: 'They fly over walls',
-    intro: 'Shell moths fly over every wall.',
-    teach: 'Shooter on a Trap makes a Missiler. LOCK ON — shells crack!',
+    intro: 'Shell moths fly over plain walls.',
+    teach: 'Wall on a Wall snags moths. Shooter on a Trap cracks shells.',
     theme: 'sky',
     tools: ['wall', 'shooter', 'trap'],
     waves: WAVES_L6,
@@ -439,7 +462,9 @@ export const LEVELS: Record<LevelId, LevelDef> = {
     extraMerges: true,
     openingRows: [2, 1, 3, 0, 4, 2, 1],
     enemyMods: {
-      moth: { hp: 120, speed: 0.82, armor: 0.32 },
+      // A step down from 120 HP / 0.82 speed / 0.32 armor. Two missiles finish one (54 + 54).
+      // Studs still only tickle (20 × 0.38). Speed is what used to blow past a short volley.
+      moth: { hp: 100, speed: 0.7, armor: 0.38 },
     },
     powers: LATER_POWERS,
   },
